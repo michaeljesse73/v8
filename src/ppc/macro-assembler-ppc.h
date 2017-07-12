@@ -7,6 +7,7 @@
 
 #include "src/assembler.h"
 #include "src/bailout-reason.h"
+#include "src/double.h"
 #include "src/frames.h"
 #include "src/globals.h"
 
@@ -133,10 +134,8 @@ class MacroAssembler : public Assembler {
   void Call(Address target, RelocInfo::Mode rmode, Condition cond = al);
   int CallSize(Handle<Code> code,
                RelocInfo::Mode rmode = RelocInfo::CODE_TARGET,
-               TypeFeedbackId ast_id = TypeFeedbackId::None(),
                Condition cond = al);
   void Call(Handle<Code> code, RelocInfo::Mode rmode = RelocInfo::CODE_TARGET,
-            TypeFeedbackId ast_id = TypeFeedbackId::None(),
             Condition cond = al);
   void Ret() { blr(); }
   void Ret(Condition cond, CRegister cr = cr7) { bclr(cond, cr); }
@@ -278,6 +277,7 @@ class MacroAssembler : public Assembler {
   // Push a handle.
   void Push(Handle<Object> handle);
   void Push(Smi* smi) { Push(Handle<Smi>(smi, isolate())); }
+  void PushObject(Handle<Object> handle);
 
   // Push two registers.  Pushes leftmost register first (to highest address).
   void Push(Register src1, Register src2) {
@@ -495,7 +495,7 @@ class MacroAssembler : public Assembler {
   void LoadSmiLiteral(Register dst, Smi* smi);
 
   // load a literal double value <value> to FPR <result>
-  void LoadDoubleLiteral(DoubleRegister result, double value, Register scratch);
+  void LoadDoubleLiteral(DoubleRegister result, Double value, Register scratch);
 
   void LoadWord(Register dst, const MemOperand& mem, Register scratch);
   void LoadWordArith(Register dst, const MemOperand& mem,
@@ -700,15 +700,6 @@ class MacroAssembler : public Assembler {
 
   void Allocate(Register object_size, Register result, Register result_end,
                 Register scratch, Label* gc_required, AllocationFlags flags);
-
-  // FastAllocate is right now only used for folded allocations. It just
-  // increments the top pointer without checking against limit. This can only
-  // be done if it was proved earlier that the allocation will succeed.
-  void FastAllocate(int object_size, Register result, Register scratch1,
-                    Register scratch2, AllocationFlags flags);
-
-  void FastAllocate(Register object_size, Register result, Register result_end,
-                    Register scratch, AllocationFlags flags);
 
   // Allocates a heap number or jumps to the gc_required label if the young
   // space is full and a scavenge is needed. All registers are clobbered also
@@ -917,7 +908,7 @@ class MacroAssembler : public Assembler {
   // Runtime calls
 
   // Call a code stub.
-  void CallStub(CodeStub* stub, TypeFeedbackId ast_id = TypeFeedbackId::None(),
+  void CallStub(CodeStub* stub,
                 Condition cond = al);
 
   // Call a code stub.
@@ -1028,9 +1019,6 @@ class MacroAssembler : public Assembler {
   // Print a message to stdout and abort execution.
   void Abort(BailoutReason reason);
 
-  // Verify restrictions about code generated in stubs.
-  void set_generating_stub(bool value) { generating_stub_ = value; }
-  bool generating_stub() { return generating_stub_; }
   void set_has_frame(bool value) { has_frame_ = value; }
   bool has_frame() { return has_frame_; }
   inline bool AllowThisStubCall(CodeStub* stub);
@@ -1303,6 +1291,9 @@ class MacroAssembler : public Assembler {
 #define SmiWordOffset(offset) offset
 #endif
 
+  // Abort execution if argument is not a FixedArray, enabled via --debug-code.
+  void AssertFixedArray(Register object);
+
   void AssertFunction(Register object);
 
   // Abort execution if argument is not a JSBoundFunction,
@@ -1487,7 +1478,6 @@ class MacroAssembler : public Assembler {
   MemOperand SafepointRegisterSlot(Register reg);
   MemOperand SafepointRegistersAndDoublesSlot(Register reg);
 
-  bool generating_stub_;
   bool has_frame_;
   Isolate* isolate_;
   // This handle will be patched with the code object on installation.

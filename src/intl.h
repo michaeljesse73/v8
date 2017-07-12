@@ -11,6 +11,7 @@
 
 #include "src/base/timezone-cache.h"
 #include "src/objects.h"
+#include "src/objects/string.h"
 #include "unicode/uversion.h"
 
 namespace U_ICU_NAMESPACE {
@@ -29,6 +30,11 @@ MUST_USE_RESULT Object* ConvertToLower(Handle<String> s, Isolate* isolate);
 MUST_USE_RESULT Object* ConvertToUpper(Handle<String> s, Isolate* isolate);
 MUST_USE_RESULT Object* ConvertCase(Handle<String> s, bool is_upper,
                                     Isolate* isolate);
+
+MUST_USE_RESULT Object* ConvertOneByteToLower(String* src, String* dst,
+                                              Isolate* isolate);
+
+const uint8_t* ToLatin1LowerTable();
 
 // ICUTimezoneCache calls out to ICU for TimezoneCache
 // functionality in a straightforward way.

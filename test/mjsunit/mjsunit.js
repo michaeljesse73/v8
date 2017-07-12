@@ -54,6 +54,11 @@ var assertSame;
 // and the properties of non-Array objects).
 var assertEquals;
 
+// Expected and found values are not identical primitive values or functions
+// or similarly structured objects (checking internal properties
+// of, e.g., Number and Date objects, the elements of arrays
+// and the properties of non-Array objects).
+var assertNotEquals;
 
 // The difference between expected and found value is within certain tolerance.
 var assertEqualsDelta;
@@ -122,6 +127,9 @@ var assertMatches;
 
 // Assert the result of a promise.
 var assertPromiseResult;
+
+var promiseTestChain;
+var promiseTestCount = 0;
 
 // These bits must be in sync with bits defined in Runtime_GetOptimizationStatus
 var V8OptimizationStatus = {
@@ -342,6 +350,12 @@ var failWithMessage;
     }
   };
 
+  assertNotEquals = function assertNotEquals(expected, found, name_opt) {
+    if (deepEquals(found, expected)) {
+      fail("not equals to " + PrettyPrint(expected), found, name_opt);
+    }
+  };
+
 
   assertEqualsDelta =
       function assertEqualsDelta(expected, found, delta, name_opt) {
@@ -422,7 +436,11 @@ var failWithMessage;
             'invalid use of assertThrows, maybe you want assertThrowsEquals');
       }
       if (arguments.length >= 3) {
-        assertEquals(cause_opt, e.message);
+        if (cause_opt instanceof RegExp) {
+          assertMatches(cause_opt, e.message, "Error message");
+        } else {
+          assertEquals(cause_opt, e.message, "Error message");
+        }
       }
       // Success.
       return;
@@ -499,21 +517,35 @@ var failWithMessage;
     // We have to patch mjsunit because normal assertion failures just throw
     // exceptions which are swallowed in a then clause.
     // We use eval here to avoid parsing issues with the natives syntax.
-    failWithMessage = (msg) => eval("%AbortJS(msg)");
-    if (!fail)
-      fail = result => failWithMessage("assertPromiseResult failed: " + result);
+    if (!success) success = () => {};
 
-    eval("%IncrementWaitCount()");
-    promise.then(
-      result => {
-        eval("%DecrementWaitCount()");
-        success(result);
-      },
-      result => {
-        eval("%DecrementWaitCount()");
-        fail(result);
-      }
-    );
+    failWithMessage = (msg) => eval("%AbortJS(msg)");
+    if (!fail) {
+      fail = result => failWithMessage("assertPromiseResult failed: " + result);
+    }
+
+    var test_promise =
+        promise.then(
+          result => {
+            try {
+              success(result);
+            } catch (e) {
+              failWithMessage(e);
+            }
+          },
+          result => {
+            fail(result);
+          }
+        )
+        .then((x)=> {
+          if (--promiseTestCount == 0) testRunner.notifyDone();
+        });
+
+    if (!promiseTestChain) promiseTestChain = Promise.resolve();
+    // waitUntilDone is idempotent.
+    testRunner.waitUntilDone();
+    ++promiseTestCount;
+    return promiseTestChain.then(test_promise);
   };
 
   var OptimizationStatusImpl = undefined;
@@ -533,7 +565,7 @@ var failWithMessage;
   assertUnoptimized = function assertUnoptimized(fun, sync_opt, name_opt) {
     if (sync_opt === undefined) sync_opt = "";
     var opt_status = OptimizationStatus(fun, sync_opt);
-    // Tests that use assertOptimized() do not make sense if --always-opt
+    // Tests that use assertUnoptimized() do not make sense if --always-opt
     // option is provided. Such tests must add --no-always-opt to flags comment.
     assertFalse((opt_status & V8OptimizationStatus.kAlwaysOptimize) !== 0,
                 "test does not make sense with --always-opt");

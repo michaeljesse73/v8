@@ -405,7 +405,7 @@ class Assembler : public AssemblerBase {
   // GetCode emits any pending (non-emitted) code and fills the descriptor
   // desc. GetCode() is idempotent; it returns the same result if no other
   // Assembler functions are invoked in between GetCode() calls.
-  void GetCode(CodeDesc* desc);
+  void GetCode(Isolate* isolate, CodeDesc* desc);
 
   // Label operations & relative jumps (PPUM Appendix D)
   //
@@ -838,8 +838,7 @@ class Assembler : public AssemblerBase {
     basr(r14, r1);
   }
 
-  void call(Handle<Code> target, RelocInfo::Mode rmode,
-            TypeFeedbackId ast_id = TypeFeedbackId::None());
+  void call(Handle<Code> target, RelocInfo::Mode rmode);
   void jump(Handle<Code> target, RelocInfo::Mode rmode, Condition cond);
 
 // S390 instruction generation
@@ -1269,17 +1268,6 @@ class Assembler : public AssemblerBase {
   // Mark address of a debug break slot.
   void RecordDebugBreakSlot(RelocInfo::Mode mode);
 
-  // Record the AST id of the CallIC being compiled, so that it can be placed
-  // in the relocation information.
-  void SetRecordedAstId(TypeFeedbackId ast_id) { recorded_ast_id_ = ast_id; }
-
-  TypeFeedbackId RecordedAstId() {
-    // roohack - another issue??? DCHECK(!recorded_ast_id_.IsNone());
-    return recorded_ast_id_;
-  }
-
-  void ClearRecordedAstId() { recorded_ast_id_ = TypeFeedbackId::None(); }
-
   // Record a comment relocation entry that can be used by a disassembler.
   // Use --code-comments to enable.
   void RecordComment(const char* msg);
@@ -1348,11 +1336,6 @@ class Assembler : public AssemblerBase {
   byte* buffer_pos() const { return buffer_; }
 
  protected:
-  // Relocation for a type-recording IC has the AST id added to it.  This
-  // member variable is a way to pass the information from the call site to
-  // the relocation info.
-  TypeFeedbackId recorded_ast_id_;
-
   int buffer_space() const { return reloc_info_writer.pos() - pc_; }
 
   // Decode instruction(s) at pos and return backchain to previous
@@ -1392,8 +1375,7 @@ class Assembler : public AssemblerBase {
   inline void UntrackBranch();
 
   inline int32_t emit_code_target(
-      Handle<Code> target, RelocInfo::Mode rmode,
-      TypeFeedbackId ast_id = TypeFeedbackId::None());
+      Handle<Code> target, RelocInfo::Mode rmode);
 
   // Helpers to emit binary encoding of 2/4/6 byte instructions.
   inline void emit2bytes(uint16_t x);
@@ -1467,6 +1449,19 @@ class Assembler : public AssemblerBase {
   int max_reach_from(int pos);
   void bind_to(Label* L, int pos);
   void next(Label* L);
+
+  // The following functions help with avoiding allocations of embedded heap
+  // objects during the code assembly phase. {RequestHeapObject} records the
+  // need for a future heap number allocation or code stub generation. After
+  // code assembly, {AllocateAndInstallRequestedHeapObjects} will allocate these
+  // objects and place them where they are expected (determined by the pc offset
+  // associated with each request). That is, for each request, it will patch the
+  // dummy heap object handle that we emitted during code assembly with the
+  // actual heap object handle.
+
+  void RequestHeapObject(HeapObjectRequest request);
+  void AllocateAndInstallRequestedHeapObjects(Isolate* isolate);
+  std::forward_list<HeapObjectRequest> heap_object_requests_;
 
   friend class RegExpMacroAssemblerS390;
   friend class RelocInfo;

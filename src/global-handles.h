@@ -43,12 +43,6 @@ enum WeaknessType {
 
 class GlobalHandles {
  public:
-  enum IterationMode {
-    HANDLE_PHANTOM_NODES_VISIT_OTHERS,
-    VISIT_OTHERS,
-    HANDLE_PHANTOM_NODES
-  };
-
   ~GlobalHandles();
 
   // Creates a new global handle that is alive until Destroy is called.
@@ -85,13 +79,6 @@ class GlobalHandles {
 
   void RecordStats(HeapStats* stats);
 
-  // Returns the current number of weak handles.
-  int NumberOfWeakHandles();
-
-  // Returns the current number of weak handles to global objects.
-  // These handles are also included in NumberOfWeakHandles().
-  int NumberOfGlobalObjectWeakHandles();
-
   // Returns the current number of handles to global objects.
   int global_handles_count() const {
     return number_of_global_handles_;
@@ -104,6 +91,8 @@ class GlobalHandles {
   void ResetNumberOfPhantomHandleResets() {
     number_of_phantom_handle_resets_ = 0;
   }
+
+  size_t NumberOfNewSpaceNodes() { return new_space_nodes_.length(); }
 
   // Clear the weakness of a global handle.
   static void* ClearWeakness(Object** location);
@@ -130,6 +119,9 @@ class GlobalHandles {
   // Iterates over all handles.
   void IterateAllRoots(RootVisitor* v);
 
+  void IterateAllNewSpaceRoots(RootVisitor* v);
+  void IterateNewSpaceRoots(RootVisitor* v, size_t start, size_t end);
+
   // Iterates over all handles that have embedder-assigned class ID.
   void IterateAllRootsWithClassIds(v8::PersistentHandleVisitor* v);
 
@@ -153,16 +145,13 @@ class GlobalHandles {
   // guaranteed to contain all handles holding new space objects (but
   // may also include old space objects).
 
-  // Iterates over strong and dependent handles. See the node above.
+  // Iterates over strong and dependent handles. See the note above.
   void IterateNewSpaceStrongAndDependentRoots(RootVisitor* v);
 
-  // Finds weak independent or partially independent handles satisfying
-  // the callback predicate and marks them as pending. See the note above.
-  void IdentifyNewSpaceWeakIndependentHandles(WeakSlotCallbackWithHeap f);
-
-  // Iterates over weak independent or partially independent handles.
-  // See the note above.
-  void IterateNewSpaceWeakIndependentRoots(RootVisitor* v);
+  // Iterates over strong and dependent handles. See the note above.
+  // Also marks unmodified nodes in the same iteration.
+  void IterateNewSpaceStrongAndDependentRootsAndIdentifyUnmodified(
+      RootVisitor* v, size_t start, size_t end);
 
   // Finds weak independent or unmodified handles satisfying
   // the callback predicate and marks them as pending. See the note above.
@@ -171,7 +160,6 @@ class GlobalHandles {
 
   // Iterates over weak independent or unmodified handles.
   // See the note above.
-  template <IterationMode mode>
   void IterateNewSpaceWeakUnmodifiedRoots(RootVisitor* v);
 
   // Identify unmodified objects that are in weak state and marks them

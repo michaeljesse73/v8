@@ -1,3 +1,4 @@
+Tests how async promise chains behave when reaching the limit of stacks
 Checks correctness of promise chains when limit hit
 inspector.setMaxAsyncTaskStacks(3)
 Run expression 'console.trace()' with async chain len: 3
@@ -21,6 +22,17 @@ Run expression 'console.trace()' with async chain len: 3
                     url : 
                 }
             ]
+            parent : {
+                callFrames : [
+                    [0] : {
+                        columnNumber : 46
+                        functionName : 
+                        lineNumber : 0
+                        scriptId : <scriptId>
+                        url : 
+                    }
+                ]
+            }
         }
         timestamp : <timestamp>
         type : trace
@@ -50,15 +62,15 @@ Run expression 'console.trace()' with async chain len: 3
             ]
             parent : {
                 callFrames : [
+                    [0] : {
+                        columnNumber : 46
+                        functionName : 
+                        lineNumber : 0
+                        scriptId : <scriptId>
+                        url : 
+                    }
                 ]
                 description : Promise.resolve
-                promiseCreationFrame : {
-                    columnNumber : 46
-                    functionName : 
-                    lineNumber : 0
-                    scriptId : <scriptId>
-                    url : 
-                }
             }
         }
         timestamp : <timestamp>
@@ -89,27 +101,15 @@ Run expression 'console.trace()' with async chain len: 3
             ]
             parent : {
                 callFrames : [
-                ]
-                description : Promise.resolve
-                parent : {
-                    callFrames : [
-                    ]
-                    description : Promise.resolve
-                    promiseCreationFrame : {
-                        columnNumber : 32
+                    [0] : {
+                        columnNumber : 46
                         functionName : 
                         lineNumber : 0
                         scriptId : <scriptId>
                         url : 
                     }
-                }
-                promiseCreationFrame : {
-                    columnNumber : 46
-                    functionName : 
-                    lineNumber : 0
-                    scriptId : <scriptId>
-                    url : 
-                }
+                ]
+                description : Promise.resolve
             }
         }
         timestamp : <timestamp>
@@ -140,15 +140,15 @@ Run expression 'console.trace()' with async chain len: 3
             ]
             parent : {
                 callFrames : [
+                    [0] : {
+                        columnNumber : 46
+                        functionName : 
+                        lineNumber : 0
+                        scriptId : <scriptId>
+                        url : 
+                    }
                 ]
                 description : Promise.resolve
-                promiseCreationFrame : {
-                    columnNumber : 46
-                    functionName : 
-                    lineNumber : 0
-                    scriptId : <scriptId>
-                    url : 
-                }
             }
         }
         timestamp : <timestamp>
@@ -179,46 +179,15 @@ Run expression 'console.trace()' with async chain len: 3
             ]
             parent : {
                 callFrames : [
-                ]
-                description : Promise.resolve
-                parent : {
-                    callFrames : [
-                    ]
-                    description : Promise.resolve
-                    parent : {
-                        callFrames : [
-                            [0] : {
-                                columnNumber : 8
-                                functionName : 
-                                lineNumber : 0
-                                scriptId : <scriptId>
-                                url : 
-                            }
-                        ]
-                        description : Promise.resolve
-                        promiseCreationFrame : {
-                            columnNumber : 18
-                            functionName : 
-                            lineNumber : 0
-                            scriptId : <scriptId>
-                            url : 
-                        }
-                    }
-                    promiseCreationFrame : {
-                        columnNumber : 32
+                    [0] : {
+                        columnNumber : 46
                         functionName : 
                         lineNumber : 0
                         scriptId : <scriptId>
                         url : 
                     }
-                }
-                promiseCreationFrame : {
-                    columnNumber : 46
-                    functionName : 
-                    lineNumber : 0
-                    scriptId : <scriptId>
-                    url : 
-                }
+                ]
+                description : Promise.resolve
             }
         }
         timestamp : <timestamp>
@@ -249,46 +218,15 @@ Run expression 'console.trace()' with async chain len: 3
             ]
             parent : {
                 callFrames : [
-                ]
-                description : Promise.resolve
-                parent : {
-                    callFrames : [
-                    ]
-                    description : Promise.resolve
-                    parent : {
-                        callFrames : [
-                            [0] : {
-                                columnNumber : 8
-                                functionName : 
-                                lineNumber : 0
-                                scriptId : <scriptId>
-                                url : 
-                            }
-                        ]
-                        description : Promise.resolve
-                        promiseCreationFrame : {
-                            columnNumber : 18
-                            functionName : 
-                            lineNumber : 0
-                            scriptId : <scriptId>
-                            url : 
-                        }
-                    }
-                    promiseCreationFrame : {
-                        columnNumber : 32
+                    [0] : {
+                        columnNumber : 46
                         functionName : 
                         lineNumber : 0
                         scriptId : <scriptId>
                         url : 
                     }
-                }
-                promiseCreationFrame : {
-                    columnNumber : 46
-                    functionName : 
-                    lineNumber : 0
-                    scriptId : <scriptId>
-                    url : 
-                }
+                ]
+                description : Promise.resolve
             }
         }
         timestamp : <timestamp>

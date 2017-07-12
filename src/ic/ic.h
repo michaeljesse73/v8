@@ -10,6 +10,7 @@
 #include "src/ic/ic-state.h"
 #include "src/macro-assembler.h"
 #include "src/messages.h"
+#include "src/objects/map.h"
 
 namespace v8 {
 namespace internal {
@@ -68,7 +69,8 @@ class IC {
   static inline bool IsHandler(Object* object);
 
   // Nofity the IC system that a feedback has changed.
-  static void OnFeedbackChanged(Isolate* isolate, JSFunction* host_function);
+  static void OnFeedbackChanged(Isolate* isolate, FeedbackVector* vector,
+                                JSFunction* host_function);
 
  protected:
   Address fp() const { return fp_; }
@@ -96,7 +98,7 @@ class IC {
   void ConfigureVectorState(Handle<Name> name, Handle<Map> map,
                             Handle<Object> handler);
   // Configure the vector for POLYMORPHIC.
-  void ConfigureVectorState(Handle<Name> name, MapHandleList* maps,
+  void ConfigureVectorState(Handle<Name> name, MapHandles const& maps,
                             List<Handle<Object>>* handlers);
 
   char TransitionMarkFromState(IC::State state);
@@ -121,11 +123,9 @@ class IC {
   Handle<Object> ComputeHandler(LookupIterator* lookup);
   virtual Handle<Object> GetMapIndependentHandler(LookupIterator* lookup) {
     UNREACHABLE();
-    return Handle<Code>::null();
   }
   virtual Handle<Code> CompileHandler(LookupIterator* lookup) {
     UNREACHABLE();
-    return Handle<Code>::null();
   }
 
   void UpdateMonomorphicIC(Handle<Object> handler, Handle<Name> name);
@@ -164,16 +164,16 @@ class IC {
     }
   }
 
-  void TargetMaps(MapHandleList* list) {
+  void TargetMaps(MapHandles* list) {
     FindTargetMaps();
-    for (int i = 0; i < target_maps_.length(); i++) {
-      list->Add(target_maps_.at(i));
+    for (Handle<Map> map : target_maps_) {
+      list->push_back(map);
     }
   }
 
   Map* FirstTargetMap() {
     FindTargetMaps();
-    return target_maps_.length() > 0 ? *target_maps_.at(0) : NULL;
+    return !target_maps_.empty() ? *target_maps_[0] : NULL;
   }
 
   Handle<FeedbackVector> vector() const { return nexus()->vector_handle(); }
@@ -223,7 +223,7 @@ class IC {
   MaybeHandle<Object> maybe_handler_;
 
   ExtraICState extra_ic_state_;
-  MapHandleList target_maps_;
+  MapHandles target_maps_;
   bool target_maps_set_;
 
   const char* slow_stub_reason_;
@@ -328,7 +328,7 @@ class KeyedLoadIC : public LoadIC {
 
   Handle<Object> LoadElementHandler(Handle<Map> receiver_map);
 
-  void LoadElementPolymorphicHandlers(MapHandleList* receiver_maps,
+  void LoadElementPolymorphicHandlers(MapHandles* receiver_maps,
                                       List<Handle<Object>>* handlers);
 };
 
@@ -414,22 +414,11 @@ class KeyedStoreIC : public StoreIC {
   Handle<Object> StoreElementHandler(Handle<Map> receiver_map,
                                      KeyedAccessStoreMode store_mode);
 
-  void StoreElementPolymorphicHandlers(MapHandleList* receiver_maps,
+  void StoreElementPolymorphicHandlers(MapHandles* receiver_maps,
                                        List<Handle<Object>>* handlers,
                                        KeyedAccessStoreMode store_mode);
 
   friend class IC;
-};
-
-
-// Type Recording BinaryOpIC, that records the types of the inputs and outputs.
-class BinaryOpIC : public IC {
- public:
-  explicit BinaryOpIC(Isolate* isolate) : IC(EXTRA_CALL_FRAME, isolate) {}
-
-  MaybeHandle<Object> Transition(Handle<AllocationSite> allocation_site,
-                                 Handle<Object> left,
-                                 Handle<Object> right) WARN_UNUSED_RESULT;
 };
 
 
@@ -460,16 +449,7 @@ class CompareIC : public IC {
   friend class IC;
 };
 
-
-class ToBooleanIC : public IC {
- public:
-  explicit ToBooleanIC(Isolate* isolate) : IC(EXTRA_CALL_FRAME, isolate) {}
-
-  Handle<Object> ToBoolean(Handle<Object> object);
-};
-
-
-// Helper for BinaryOpIC and CompareIC.
+// Helper for CompareIC.
 enum InlinedSmiCheck { ENABLE_INLINED_SMI_CHECK, DISABLE_INLINED_SMI_CHECK };
 void PatchInlinedSmiCode(Isolate* isolate, Address address,
                          InlinedSmiCheck check);

@@ -1644,6 +1644,8 @@ void Simulator::TearDown(base::CustomMatcherHashMap* i_cache,
 void* Simulator::RedirectExternalReference(Isolate* isolate,
                                            void* external_function,
                                            ExternalReference::Type type) {
+  base::LockGuard<base::Mutex> lock_guard(
+      isolate->simulator_redirection_mutex());
   Redirection* redirection = Redirection::Get(isolate, external_function, type);
   return redirection->address();
 }
@@ -2942,7 +2944,6 @@ uintptr_t Simulator::PopAddress() {
 
 int Simulator::Evaluate_Unknown(Instruction* instr) {
   UNREACHABLE();
-  return 0;
 }
 
 EVALUATE(VFA) {
@@ -4690,7 +4691,6 @@ EVALUATE(TMLL) {
   }
 #endif
   UNREACHABLE();
-  return length;
 }
 
 EVALUATE(TMHH) {
@@ -7311,7 +7311,6 @@ EVALUATE(DLGR) {
   // 32 bit arch doesn't support __int128 type
   USE(instr);
   UNREACHABLE();
-  return 0;
 #endif
 }
 
@@ -8531,7 +8530,6 @@ EVALUATE(DLG) {
   // 32 bit arch doesn't support __int128 type
   USE(instr);
   UNREACHABLE();
-  return 0;
 #endif
 }
 

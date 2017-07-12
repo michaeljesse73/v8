@@ -38,6 +38,8 @@ Reduction JSIntrinsicLowering::Reduce(Node* node) {
       return ReduceDeoptimizeNow(node);
     case Runtime::kInlineGeneratorClose:
       return ReduceGeneratorClose(node);
+    case Runtime::kInlineCreateJSGeneratorObject:
+      return ReduceCreateJSGeneratorObject(node);
     case Runtime::kInlineGeneratorGetInputOrDebugPos:
       return ReduceGeneratorGetInputOrDebugPos(node);
     case Runtime::kInlineAsyncGeneratorGetAwaitInputOrDebugPos:
@@ -56,6 +58,14 @@ Reduction JSIntrinsicLowering::Reduce(Node* node) {
       return ReduceIsInstanceType(node, JS_TYPED_ARRAY_TYPE);
     case Runtime::kInlineIsJSProxy:
       return ReduceIsInstanceType(node, JS_PROXY_TYPE);
+    case Runtime::kInlineIsJSMap:
+      return ReduceIsInstanceType(node, JS_MAP_TYPE);
+    case Runtime::kInlineIsJSSet:
+      return ReduceIsInstanceType(node, JS_SET_TYPE);
+    case Runtime::kInlineIsJSWeakMap:
+      return ReduceIsInstanceType(node, JS_WEAK_MAP_TYPE);
+    case Runtime::kInlineIsJSWeakSet:
+      return ReduceIsInstanceType(node, JS_WEAK_SET_TYPE);
     case Runtime::kInlineIsJSReceiver:
       return ReduceIsJSReceiver(node);
     case Runtime::kInlineIsSmi:
@@ -147,6 +157,19 @@ Reduction JSIntrinsicLowering::ReduceDeoptimizeNow(Node* node) {
   return Changed(node);
 }
 
+Reduction JSIntrinsicLowering::ReduceCreateJSGeneratorObject(Node* node) {
+  Node* const closure = NodeProperties::GetValueInput(node, 0);
+  Node* const receiver = NodeProperties::GetValueInput(node, 1);
+  Node* const context = NodeProperties::GetContextInput(node);
+  Node* const effect = NodeProperties::GetEffectInput(node);
+  Node* const control = NodeProperties::GetControlInput(node);
+  Operator const* const op = javascript()->CreateGeneratorObject();
+  Node* create_generator =
+      graph()->NewNode(op, closure, receiver, context, effect, control);
+  ReplaceWithValue(node, create_generator, create_generator);
+  return Changed(create_generator);
+}
+
 Reduction JSIntrinsicLowering::ReduceGeneratorClose(Node* node) {
   Node* const generator = NodeProperties::GetValueInput(node, 0);
   Node* const effect = NodeProperties::GetEffectInput(node);
@@ -183,11 +206,15 @@ Reduction JSIntrinsicLowering::ReduceAsyncGeneratorGetAwaitInputOrDebugPos(
 }
 
 Reduction JSIntrinsicLowering::ReduceAsyncGeneratorReject(Node* node) {
-  return Change(node, CodeFactory::AsyncGeneratorReject(isolate()), 0);
+  return Change(
+      node, Builtins::CallableFor(isolate(), Builtins::kAsyncGeneratorReject),
+      0);
 }
 
 Reduction JSIntrinsicLowering::ReduceAsyncGeneratorResolve(Node* node) {
-  return Change(node, CodeFactory::AsyncGeneratorResolve(isolate()), 0);
+  return Change(
+      node, Builtins::CallableFor(isolate(), Builtins::kAsyncGeneratorResolve),
+      0);
 }
 
 Reduction JSIntrinsicLowering::ReduceGeneratorGetContext(Node* node) {
@@ -338,10 +365,7 @@ Reduction JSIntrinsicLowering::ReduceToString(Node* node) {
 
 Reduction JSIntrinsicLowering::ReduceCall(Node* node) {
   size_t const arity = CallRuntimeParametersOf(node->op()).arity();
-  NodeProperties::ChangeOp(
-      node,
-      javascript()->Call(arity, 0.0f, VectorSlotPair(),
-                         ConvertReceiverMode::kAny, TailCallMode::kDisallow));
+  NodeProperties::ChangeOp(node, javascript()->Call(arity));
   return Changed(node);
 }
 

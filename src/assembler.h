@@ -35,11 +35,13 @@
 #ifndef V8_ASSEMBLER_H_
 #define V8_ASSEMBLER_H_
 
+#include <forward_list>
+
 #include "src/allocation.h"
 #include "src/builtins/builtins.h"
 #include "src/deoptimize-reason.h"
+#include "src/double.h"
 #include "src/globals.h"
-#include "src/isolate.h"
 #include "src/label.h"
 #include "src/log.h"
 #include "src/register-configuration.h"
@@ -53,6 +55,7 @@ class ApiFunction;
 namespace internal {
 
 // Forward declarations.
+class Isolate;
 class SourcePosition;
 class StatsCounter;
 
@@ -108,7 +111,6 @@ class AssemblerBase: public Malloced {
     } else {
       // Embedded constant pool not supported on this architecture.
       UNREACHABLE();
-      return false;
     }
   }
 
@@ -162,7 +164,6 @@ class AssemblerBase: public Malloced {
   friend class FrameAndConstantPoolScope;
   friend class ConstantPoolUnavailableScope;
 };
-
 
 // Avoids emitting debug code during the lifetime of this scope object.
 class DontEmitDebugCodeScope BASE_EMBEDDED {
@@ -324,9 +325,10 @@ class RelocInfo {
   enum Mode {
     // Please note the order is important (see IsCodeTarget, IsGCRelocMode).
     CODE_TARGET,
-    CODE_TARGET_WITH_ID,
     EMBEDDED_OBJECT,
-    // To relocate pointers into the wasm memory embedded in wasm code
+    // Wasm entries are to relocate pointers into the wasm memory embedded in
+    // wasm code. Everything after WASM_MEMORY_REFERENCE (inclusive) is not
+    // GC'ed.
     WASM_MEMORY_REFERENCE,
     WASM_GLOBAL_REFERENCE,
     WASM_MEMORY_SIZE_REFERENCE,
@@ -334,7 +336,6 @@ class RelocInfo {
     WASM_PROTECTED_INSTRUCTION_LANDING,
     CELL,
 
-    // Everything after runtime_entry (inclusive) is not GC'ed.
     RUNTIME_ENTRY,
     COMMENT,
 
@@ -373,8 +374,8 @@ class RelocInfo {
 
     FIRST_REAL_RELOC_MODE = CODE_TARGET,
     LAST_REAL_RELOC_MODE = VENEER_POOL,
-    LAST_CODE_ENUM = CODE_TARGET_WITH_ID,
-    LAST_GCED_ENUM = WASM_FUNCTION_TABLE_SIZE_REFERENCE,
+    LAST_CODE_ENUM = CODE_TARGET,
+    LAST_GCED_ENUM = EMBEDDED_OBJECT,
     FIRST_SHAREABLE_RELOC_MODE = CELL,
   };
 
@@ -619,7 +620,6 @@ class RelocInfo {
 #endif
 
   static const int kCodeTargetMask = (1 << (LAST_CODE_ENUM + 1)) - 1;
-  static const int kDataMask = (1 << CODE_TARGET_WITH_ID) | (1 << COMMENT);
   static const int kDebugBreakSlotMask = 1 << DEBUG_BREAK_SLOT_AT_POSITION |
                                          1 << DEBUG_BREAK_SLOT_AT_RETURN |
                                          1 << DEBUG_BREAK_SLOT_AT_CALL;
@@ -647,8 +647,8 @@ class RelocInfo {
 // lower addresses.
 class RelocInfoWriter BASE_EMBEDDED {
  public:
-  RelocInfoWriter() : pos_(NULL), last_pc_(NULL), last_id_(0) {}
-  RelocInfoWriter(byte* pos, byte* pc) : pos_(pos), last_pc_(pc), last_id_(0) {}
+  RelocInfoWriter() : pos_(NULL), last_pc_(NULL) {}
+  RelocInfoWriter(byte* pos, byte* pc) : pos_(pos), last_pc_(pc) {}
 
   byte* pos() const { return pos_; }
   byte* last_pc() const { return last_pc_; }
@@ -673,7 +673,7 @@ class RelocInfoWriter BASE_EMBEDDED {
   inline uint32_t WriteLongPCJump(uint32_t pc_delta);
 
   inline void WriteShortTaggedPC(uint32_t pc_delta, int tag);
-  inline void WriteShortTaggedData(intptr_t data_delta, int tag);
+  inline void WriteShortData(intptr_t data_delta);
 
   inline void WriteMode(RelocInfo::Mode rmode);
   inline void WriteModeAndPC(uint32_t pc_delta, RelocInfo::Mode rmode);
@@ -682,7 +682,6 @@ class RelocInfoWriter BASE_EMBEDDED {
 
   byte* pos_;
   byte* last_pc_;
-  int last_id_;
   RelocInfo::Mode last_mode_;
 
   DISALLOW_COPY_AND_ASSIGN(RelocInfoWriter);
@@ -726,13 +725,10 @@ class RelocIterator: public Malloced {
 
   void AdvanceReadLongPCJump();
 
-  int GetShortDataTypeTag();
   void ReadShortTaggedPC();
-  void ReadShortTaggedId();
-  void ReadShortTaggedData();
+  void ReadShortData();
 
   void AdvanceReadPC();
-  void AdvanceReadId();
   void AdvanceReadInt();
   void AdvanceReadData();
 
@@ -748,7 +744,6 @@ class RelocIterator: public Malloced {
   RelocInfo rinfo_;
   bool done_;
   int mode_mask_;
-  int last_id_;
   DISALLOW_COPY_AND_ASSIGN(RelocIterator);
 };
 
@@ -818,6 +813,7 @@ class ExternalReference BASE_EMBEDDED {
 
   static void SetUp();
 
+  // These functions must use the isolate in a thread-safe way.
   typedef void* ExternalReferenceRedirector(Isolate* isolate, void* original,
                                             Type type);
 
@@ -835,7 +831,7 @@ class ExternalReference BASE_EMBEDDED {
 
   explicit ExternalReference(StatsCounter* counter);
 
-  ExternalReference(Isolate::AddressId id, Isolate* isolate);
+  ExternalReference(IsolateAddressId id, Isolate* isolate);
 
   explicit ExternalReference(const SCTableReference& table_ref);
 
@@ -988,12 +984,23 @@ class ExternalReference BASE_EMBEDDED {
 
   static ExternalReference libc_memchr_function(Isolate* isolate);
   static ExternalReference libc_memcpy_function(Isolate* isolate);
+  static ExternalReference libc_memmove_function(Isolate* isolate);
   static ExternalReference libc_memset_function(Isolate* isolate);
 
   static ExternalReference try_internalize_string_function(Isolate* isolate);
 
+#ifdef V8_INTL_SUPPORT
+  static ExternalReference intl_convert_one_byte_to_lower(Isolate* isolate);
+  static ExternalReference intl_to_latin1_lower_table(Isolate* isolate);
+#endif  // V8_INTL_SUPPORT
+
   template <typename SubjectChar, typename PatternChar>
   static ExternalReference search_string_raw(Isolate* isolate);
+
+  static ExternalReference orderedhashmap_gethash_raw(Isolate* isolate);
+
+  template <typename CollectionType, int entrysize>
+  static ExternalReference orderedhashtable_has_raw(Isolate* isolate);
 
   static ExternalReference page_flags(Page* page);
 
@@ -1050,12 +1057,7 @@ class ExternalReference BASE_EMBEDDED {
   // This lets you register a function that rewrites all external references.
   // Used by the ARM simulator to catch calls to external references.
   static void set_redirector(Isolate* isolate,
-                             ExternalReferenceRedirector* redirector) {
-    // We can't stack them.
-    DCHECK(isolate->external_reference_redirector() == NULL);
-    isolate->set_external_reference_redirector(
-        reinterpret_cast<ExternalReferenceRedirectorPointer*>(redirector));
-  }
+                             ExternalReferenceRedirector* redirector);
 
   static ExternalReference stress_deopt_count(Isolate* isolate);
 
@@ -1149,8 +1151,10 @@ class ConstantPoolEntry {
       : position_(position),
         merged_index_(sharing_ok ? SHARING_ALLOWED : SHARING_PROHIBITED),
         value_(value) {}
-  ConstantPoolEntry(int position, double value)
-      : position_(position), merged_index_(SHARING_ALLOWED), value64_(value) {}
+  ConstantPoolEntry(int position, Double value)
+      : position_(position),
+        merged_index_(SHARING_ALLOWED),
+        value64_(value.AsUint64()) {}
 
   int position() const { return position_; }
   bool sharing_ok() const { return merged_index_ != SHARING_PROHIBITED; }
@@ -1160,6 +1164,7 @@ class ConstantPoolEntry {
     return merged_index_;
   }
   void set_merged_index(int index) {
+    DCHECK(sharing_ok());
     merged_index_ = index;
     DCHECK(is_merged());
   }
@@ -1172,7 +1177,7 @@ class ConstantPoolEntry {
     merged_index_ = offset;
   }
   intptr_t value() const { return value_; }
-  uint64_t value64() const { return bit_cast<uint64_t>(value64_); }
+  uint64_t value64() const { return value64_; }
 
   enum Type { INTPTR, DOUBLE, NUMBER_OF_TYPES };
 
@@ -1187,7 +1192,7 @@ class ConstantPoolEntry {
   int merged_index_;
   union {
     intptr_t value_;
-    double value64_;
+    uint64_t value64_;
   };
   enum { SHARING_PROHIBITED = -2, SHARING_ALLOWED = -1 };
 };
@@ -1208,9 +1213,14 @@ class ConstantPoolBuilder BASE_EMBEDDED {
   }
 
   // Add double constant to the embedded constant pool
-  ConstantPoolEntry::Access AddEntry(int position, double value) {
+  ConstantPoolEntry::Access AddEntry(int position, Double value) {
     ConstantPoolEntry entry(position, value);
     return AddEntry(entry, ConstantPoolEntry::DOUBLE);
+  }
+
+  // Add double constant to the embedded constant pool
+  ConstantPoolEntry::Access AddEntry(int position, double value) {
+    return AddEntry(position, Double(value));
   }
 
   // Previews the access type required for the next new entry to be added.
@@ -1256,6 +1266,46 @@ class ConstantPoolBuilder BASE_EMBEDDED {
 
   Label emitted_label_;  // Records pc_offset of emitted pool
   PerTypeEntryInfo info_[ConstantPoolEntry::NUMBER_OF_TYPES];
+};
+
+class HeapObjectRequest {
+ public:
+  explicit HeapObjectRequest(double heap_number, int offset = -1);
+  explicit HeapObjectRequest(CodeStub* code_stub, int offset = -1);
+
+  enum Kind { kHeapNumber, kCodeStub };
+  Kind kind() const { return kind_; }
+
+  double heap_number() const {
+    DCHECK_EQ(kind(), kHeapNumber);
+    return value_.heap_number;
+  }
+
+  CodeStub* code_stub() const {
+    DCHECK_EQ(kind(), kCodeStub);
+    return value_.code_stub;
+  }
+
+  // The code buffer offset at the time of the request.
+  int offset() const {
+    DCHECK_GE(offset_, 0);
+    return offset_;
+  }
+  void set_offset(int offset) {
+    DCHECK_LT(offset_, 0);
+    offset_ = offset;
+    DCHECK_GE(offset_, 0);
+  }
+
+ private:
+  Kind kind_;
+
+  union {
+    double heap_number;
+    CodeStub* code_stub;
+  } value_;
+
+  int offset_;
 };
 
 }  // namespace internal

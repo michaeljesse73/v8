@@ -50,7 +50,7 @@ var f = (function outer() {
 f()()();
 `;
 
-InspectorTest.log("Test collecting code coverage data with Profiler.collectCoverage.");
+let {session, contextGroup, Protocol} = InspectorTest.start("Test collecting code coverage data with Profiler.collectCoverage.");
 
 function ClearAndGC() {
   return Protocol.Runtime.evaluate({ expression: "fib = g = f = h = is_optimized = null;" })
@@ -58,9 +58,7 @@ function ClearAndGC() {
 }
 
 function GC() {
-  return Protocol.HeapProfiler.enable()
-           .then(() => Protocol.HeapProfiler.collectGarbage())
-           .then(() => Protocol.HeapProfiler.disable());
+  return Protocol.HeapProfiler.collectGarbage();
 }
 
 function LogSorted(message) {

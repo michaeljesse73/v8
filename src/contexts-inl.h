@@ -9,7 +9,9 @@
 #include "src/heap/heap.h"
 #include "src/objects-inl.h"
 #include "src/objects/dictionary.h"
+#include "src/objects/map-inl.h"
 #include "src/objects/regexp-match-info.h"
+#include "src/objects/shared-function-info-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -21,11 +23,7 @@ ScriptContextTable* ScriptContextTable::cast(Object* context) {
   return reinterpret_cast<ScriptContextTable*>(context);
 }
 
-
-int ScriptContextTable::used() const {
-  return Smi::cast(get(kUsedSlot))->value();
-}
-
+int ScriptContextTable::used() const { return Smi::ToInt(get(kUsedSlot)); }
 
 void ScriptContextTable::set_used(int used) {
   set(kUsedSlot, Smi::FromInt(used));
@@ -129,10 +127,6 @@ bool Context::IsEvalContext() {
 bool Context::IsScriptContext() {
   Map* map = this->map();
   return map == map->GetHeap()->script_context_map();
-}
-
-bool Context::OptimizedCodeMapIsCleared() {
-  return osr_code_table() == GetHeap()->empty_fixed_array();
 }
 
 bool Context::HasSameSecurityTokenAs(Context* that) {

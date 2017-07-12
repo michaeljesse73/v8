@@ -44,6 +44,8 @@ class V8_EXPORT_PRIVATE JSCreateLowering final
         zone_(zone) {}
   ~JSCreateLowering() final {}
 
+  const char* reducer_name() const override { return "JSCreateLowering"; }
+
   Reduction Reduce(Node* node) final;
 
  private:
@@ -57,6 +59,7 @@ class V8_EXPORT_PRIVATE JSCreateLowering final
   Reduction ReduceJSCreateWithContext(Node* node);
   Reduction ReduceJSCreateCatchContext(Node* node);
   Reduction ReduceJSCreateBlockContext(Node* node);
+  Reduction ReduceJSCreateGeneratorObject(Node* node);
   Reduction ReduceNewArray(Node* node, Node* length, int capacity,
                            Handle<AllocationSite> site);
   Reduction ReduceNewArray(Node* node, std::vector<Node*> values,
@@ -93,10 +96,8 @@ class V8_EXPORT_PRIVATE JSCreateLowering final
   JSGraph* jsgraph() const { return jsgraph_; }
   Isolate* isolate() const;
   Handle<Context> native_context() const { return native_context_; }
-  JSOperatorBuilder* javascript() const;
   CommonOperatorBuilder* common() const;
   SimplifiedOperatorBuilder* simplified() const;
-  MachineOperatorBuilder* machine() const;
   CompilationDependencies* dependencies() const { return dependencies_; }
   Zone* zone() const { return zone_; }
 

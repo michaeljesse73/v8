@@ -22,7 +22,7 @@ class Isolate;
 namespace wasm {
 
 // Base class for Result<T>.
-class ResultBase {
+class V8_EXPORT_PRIVATE ResultBase {
  protected:
   ResultBase(ResultBase&& other)
       : error_offset_(other.error_offset_),
@@ -69,7 +69,7 @@ class Result : public ResultBase {
   Result() = default;
 
   template <typename S>
-  explicit Result(S&& value) : val(value) {}
+  explicit Result(S&& value) : val(std::forward<S>(value)) {}
 
   template <typename S>
   Result(Result<S>&& other)
@@ -95,8 +95,10 @@ class Result : public ResultBase {
 // A helper for generating error messages that bubble up to JS exceptions.
 class V8_EXPORT_PRIVATE ErrorThrower {
  public:
-  ErrorThrower(i::Isolate* isolate, const char* context)
+  ErrorThrower(Isolate* isolate, const char* context)
       : isolate_(isolate), context_(context) {}
+  // Explicitly allow move-construction. Disallow copy (below).
+  ErrorThrower(ErrorThrower&& other);
   ~ErrorThrower();
 
   PRINTF_FORMAT(2, 3) void TypeError(const char* fmt, ...);
@@ -112,22 +114,43 @@ class V8_EXPORT_PRIVATE ErrorThrower {
                  result.error_offset());
   }
 
-  i::Handle<i::Object> Reify() {
-    i::Handle<i::Object> result = exception_;
-    exception_ = i::Handle<i::Object>::null();
-    return result;
-  }
+  // Create and return exception object.
+  MUST_USE_RESULT Handle<Object> Reify();
 
-  bool error() const { return !exception_.is_null(); }
-  bool wasm_error() { return wasm_error_; }
+  // Reset any error which was set on this thrower.
+  void Reset();
+
+  bool error() const { return error_type_ != kNone; }
+  bool wasm_error() { return error_type_ >= kFirstWasmError; }
+
+  Isolate* isolate() const { return isolate_; }
 
  private:
-  void Format(i::Handle<i::JSFunction> constructor, const char* fmt, va_list);
+  enum ErrorType {
+    kNone,
+    // General errors.
+    kTypeError,
+    kRangeError,
+    // Wasm errors.
+    kCompileError,
+    kLinkError,
+    kRuntimeError,
 
-  i::Isolate* isolate_;
+    // Marker.
+    kFirstWasmError = kCompileError
+  };
+
+  void Format(ErrorType error_type_, const char* fmt, va_list);
+
+  Isolate* isolate_;
   const char* context_;
-  i::Handle<i::Object> exception_;
-  bool wasm_error_ = false;
+  ErrorType error_type_ = kNone;
+  std::string error_msg_;
+
+  DISALLOW_COPY_AND_ASSIGN(ErrorThrower);
+  // ErrorThrower should always be stack-allocated, since it constitutes a scope
+  // (things happen in the destructor).
+  DISALLOW_NEW_AND_DELETE();
 };
 
 }  // namespace wasm

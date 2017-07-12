@@ -55,6 +55,7 @@
 #include "src/ic/ic.h"
 #include "src/ic/stub-cache.h"
 #include "src/interpreter/interpreter.h"
+#include "src/isolate.h"
 #include "src/ostreams.h"
 #include "src/regexp/jsregexp.h"
 #include "src/regexp/regexp-macro-assembler.h"
@@ -90,6 +91,10 @@
 #error "Unknown architecture."
 #endif  // Target architecture.
 #endif  // V8_INTERPRETED_REGEXP
+
+#ifdef V8_INTL_SUPPORT
+#include "src/intl.h"
+#endif  // V8_INTL_SUPPORT
 
 namespace v8 {
 namespace internal {
@@ -263,15 +268,11 @@ unsigned CpuFeatures::dcache_line_size_ = 0;
 //   01: code_target:          [6-bit pc delta] 01
 //
 //   10: short_data_record:    [6-bit pc delta] 10 followed by
-//                             [6-bit data delta] [2-bit data type tag]
+//                             [8-bit data delta]
 //
 //   11: long_record           [6 bit reloc mode] 11
 //                             followed by pc delta
 //                             followed by optional data depending on type.
-//
-//  1-bit data type tags, used in short_data_record and data_jump long_record:
-//   code_target_with_id: 0
-//   deopt_reason:        1
 //
 //  If a pc delta exceeds 6 bits, it is split into a remainder that fits into
 //  6 bits and a part that does not. The latter is encoded as a long record
@@ -288,8 +289,6 @@ unsigned CpuFeatures::dcache_line_size_ = 0;
 const int kTagBits = 2;
 const int kTagMask = (1 << kTagBits) - 1;
 const int kLongTagBits = 6;
-const int kShortDataTypeTagBits = 1;
-const int kShortDataBits = kBitsPerByte - kShortDataTypeTagBits;
 
 const int kEmbeddedObjectTag = 0;
 const int kCodeTargetTag = 1;
@@ -306,14 +305,10 @@ const int kLastChunkTagBits = 1;
 const int kLastChunkTagMask = 1;
 const int kLastChunkTag = 1;
 
-const int kCodeWithIdTag = 0;
-const int kDeoptReasonTag = 1;
-
 void RelocInfo::update_wasm_memory_reference(
     Isolate* isolate, Address old_base, Address new_base,
     ICacheFlushMode icache_flush_mode) {
   DCHECK(IsWasmMemoryReference(rmode_));
-  DCHECK_GE(wasm_memory_reference(), old_base);
   Address updated_reference = new_base + (wasm_memory_reference() - old_base);
   // The reference is not checked here but at runtime. Validity of references
   // may change over time.
@@ -395,9 +390,8 @@ void RelocInfoWriter::WriteShortTaggedPC(uint32_t pc_delta, int tag) {
   *--pos_ = pc_delta << kTagBits | tag;
 }
 
-
-void RelocInfoWriter::WriteShortTaggedData(intptr_t data_delta, int tag) {
-  *--pos_ = static_cast<byte>(data_delta << kShortDataTypeTagBits | tag);
+void RelocInfoWriter::WriteShortData(intptr_t data_delta) {
+  *--pos_ = static_cast<byte>(data_delta);
 }
 
 
@@ -449,24 +443,10 @@ void RelocInfoWriter::Write(const RelocInfo* rinfo) {
   } else if (rmode == RelocInfo::CODE_TARGET) {
     WriteShortTaggedPC(pc_delta, kCodeTargetTag);
     DCHECK(begin_pos - pos_ <= RelocInfo::kMaxCallSize);
-  } else if (rmode == RelocInfo::CODE_TARGET_WITH_ID) {
-    // Use signed delta-encoding for id.
-    DCHECK_EQ(static_cast<int>(rinfo->data()), rinfo->data());
-    int id_delta = static_cast<int>(rinfo->data()) - last_id_;
-    // Check if delta is small enough to fit in a tagged byte.
-    if (is_intn(id_delta, kShortDataBits)) {
-      WriteShortTaggedPC(pc_delta, kLocatableTag);
-      WriteShortTaggedData(id_delta, kCodeWithIdTag);
-    } else {
-      // Otherwise, use costly encoding.
-      WriteModeAndPC(pc_delta, rmode);
-      WriteIntData(id_delta);
-    }
-    last_id_ = static_cast<int>(rinfo->data());
   } else if (rmode == RelocInfo::DEOPT_REASON) {
-    DCHECK(rinfo->data() < (1 << kShortDataBits));
+    DCHECK(rinfo->data() < (1 << kBitsPerByte));
     WriteShortTaggedPC(pc_delta, kLocatableTag);
-    WriteShortTaggedData(rinfo->data(), kDeoptReasonTag);
+    WriteShortData(rinfo->data());
   } else {
     WriteModeAndPC(pc_delta, rmode);
     if (RelocInfo::IsComment(rmode)) {
@@ -507,16 +487,6 @@ inline void RelocIterator::AdvanceReadPC() {
 }
 
 
-void RelocIterator::AdvanceReadId() {
-  int x = 0;
-  for (int i = 0; i < kIntSize; i++) {
-    x |= static_cast<int>(*--pos_) << i * kBitsPerByte;
-  }
-  last_id_ += x;
-  rinfo_.data_ = last_id_;
-}
-
-
 void RelocIterator::AdvanceReadInt() {
   int x = 0;
   for (int i = 0; i < kIntSize; i++) {
@@ -550,23 +520,9 @@ void RelocIterator::AdvanceReadLongPCJump() {
   rinfo_.pc_ += pc_jump << kSmallPCDeltaBits;
 }
 
-
-inline int RelocIterator::GetShortDataTypeTag() {
-  return *pos_ & ((1 << kShortDataTypeTagBits) - 1);
-}
-
-
-inline void RelocIterator::ReadShortTaggedId() {
-  int8_t signed_b = *pos_;
-  // Signed right shift is arithmetic shift.  Tested in test-utils.cc.
-  last_id_ += signed_b >> kShortDataTypeTagBits;
-  rinfo_.data_ = last_id_;
-}
-
-
-inline void RelocIterator::ReadShortTaggedData() {
+inline void RelocIterator::ReadShortData() {
   uint8_t unsigned_b = *pos_;
-  rinfo_.data_ = unsigned_b >> kShortDataTypeTagBits;
+  rinfo_.data_ = unsigned_b;
 }
 
 
@@ -588,18 +544,9 @@ void RelocIterator::next() {
     } else if (tag == kLocatableTag) {
       ReadShortTaggedPC();
       Advance();
-      int data_type_tag = GetShortDataTypeTag();
-      if (data_type_tag == kCodeWithIdTag) {
-        if (SetMode(RelocInfo::CODE_TARGET_WITH_ID)) {
-          ReadShortTaggedId();
-          return;
-        }
-      } else {
-        DCHECK(data_type_tag == kDeoptReasonTag);
-        if (SetMode(RelocInfo::DEOPT_REASON)) {
-          ReadShortTaggedData();
-          return;
-        }
+      if (SetMode(RelocInfo::DEOPT_REASON)) {
+        ReadShortData();
+        return;
       }
     } else {
       DCHECK(tag == kDefaultTag);
@@ -608,13 +555,7 @@ void RelocIterator::next() {
         AdvanceReadLongPCJump();
       } else {
         AdvanceReadPC();
-        if (rmode == RelocInfo::CODE_TARGET_WITH_ID) {
-          if (SetMode(rmode)) {
-            AdvanceReadId();
-            return;
-          }
-          Advance(kIntSize);
-        } else if (RelocInfo::IsComment(rmode)) {
+        if (RelocInfo::IsComment(rmode)) {
           if (SetMode(rmode)) {
             AdvanceReadData();
             return;
@@ -657,7 +598,6 @@ RelocIterator::RelocIterator(Code* code, int mode_mask) {
   end_ = code->relocation_start();
   done_ = false;
   mode_mask_ = mode_mask;
-  last_id_ = 0;
   byte* sequence = code->FindCodeAgeSequence();
   // We get the isolate from the map, because at serialization time
   // the code pointer has been cloned and isn't really in heap space.
@@ -679,7 +619,6 @@ RelocIterator::RelocIterator(const CodeDesc& desc, int mode_mask) {
   end_ = pos_ - desc.reloc_size;
   done_ = false;
   mode_mask_ = mode_mask;
-  last_id_ = 0;
   code_age_sequence_ = NULL;
   if (mode_mask_ == 0) pos_ = end_;
   next();
@@ -719,8 +658,6 @@ const char* RelocInfo::RelocModeName(RelocInfo::Mode rmode) {
       return "embedded object";
     case CODE_TARGET:
       return "code target";
-    case CODE_TARGET_WITH_ID:
-      return "code target with id";
     case CELL:
       return "property cell";
     case RUNTIME_ENTRY:
@@ -768,7 +705,6 @@ const char* RelocInfo::RelocModeName(RelocInfo::Mode rmode) {
     case NUMBER_OF_MODES:
     case PC_JUMP:
       UNREACHABLE();
-      return "number_of_modes";
   }
   return "unknown relocation type";
 }
@@ -795,9 +731,6 @@ void RelocInfo::Print(Isolate* isolate, std::ostream& os) {  // NOLINT
     Code* code = Code::GetCodeFromTargetAddress(target_address());
     os << " (" << Code::Kind2String(code->kind()) << ")  ("
        << static_cast<const void*>(target_address()) << ")";
-    if (rmode_ == CODE_TARGET_WITH_ID) {
-      os << " (id=" << static_cast<int>(data_) << ")";
-    }
   } else if (IsRuntimeEntry(rmode_) &&
              isolate->deoptimizer_data() != NULL) {
     // Depotimization bailouts are stored as runtime entries.
@@ -824,7 +757,6 @@ void RelocInfo::Verify(Isolate* isolate) {
     case CELL:
       Object::VerifyPointer(target_cell());
       break;
-    case CODE_TARGET_WITH_ID:
     case CODE_TARGET: {
       // convert inline target address to code object
       Address addr = target_address();
@@ -891,7 +823,6 @@ static ExternalReference::Type BuiltinCallTypeForResultSize(int result_size) {
       return ExternalReference::BUILTIN_CALL_TRIPLE;
   }
   UNREACHABLE();
-  return ExternalReference::BUILTIN_CALL;
 }
 
 
@@ -947,10 +878,8 @@ ExternalReference ExternalReference::interpreter_dispatch_counters(
 ExternalReference::ExternalReference(StatsCounter* counter)
   : address_(reinterpret_cast<Address>(counter->GetInternalPointer())) {}
 
-
-ExternalReference::ExternalReference(Isolate::AddressId id, Isolate* isolate)
-  : address_(isolate->get_address_from_id(id)) {}
-
+ExternalReference::ExternalReference(IsolateAddressId id, Isolate* isolate)
+    : address_(isolate->get_address_from_id(id)) {}
 
 ExternalReference::ExternalReference(const SCTableReference& table_ref)
   : address_(table_ref.address()) {}
@@ -1011,6 +940,13 @@ ExternalReference ExternalReference::date_cache_stamp(Isolate* isolate) {
   return ExternalReference(isolate->date_cache()->stamp_address());
 }
 
+void ExternalReference::set_redirector(
+    Isolate* isolate, ExternalReferenceRedirector* redirector) {
+  // We can't stack them.
+  DCHECK(isolate->external_reference_redirector() == NULL);
+  isolate->set_external_reference_redirector(
+      reinterpret_cast<ExternalReferenceRedirectorPointer*>(redirector));
+}
 
 ExternalReference ExternalReference::stress_deopt_count(Isolate* isolate) {
   return ExternalReference(isolate->stress_deopt_count_address());
@@ -1551,6 +1487,14 @@ ExternalReference ExternalReference::libc_memcpy_function(Isolate* isolate) {
   return ExternalReference(Redirect(isolate, FUNCTION_ADDR(libc_memcpy)));
 }
 
+void* libc_memmove(void* dest, const void* src, size_t n) {
+  return memmove(dest, src, n);
+}
+
+ExternalReference ExternalReference::libc_memmove_function(Isolate* isolate) {
+  return ExternalReference(Redirect(isolate, FUNCTION_ADDR(libc_memmove)));
+}
+
 void* libc_memset(void* dest, int byte, size_t n) {
   DCHECK_EQ(static_cast<char>(byte), byte);
   return memset(dest, byte, n);
@@ -1566,11 +1510,38 @@ ExternalReference ExternalReference::search_string_raw(Isolate* isolate) {
   return ExternalReference(Redirect(isolate, FUNCTION_ADDR(f)));
 }
 
+ExternalReference ExternalReference::orderedhashmap_gethash_raw(
+    Isolate* isolate) {
+  auto f = OrderedHashMap::GetHash;
+  return ExternalReference(Redirect(isolate, FUNCTION_ADDR(f)));
+}
+
+template <typename CollectionType, int entrysize>
+ExternalReference ExternalReference::orderedhashtable_has_raw(
+    Isolate* isolate) {
+  auto f = OrderedHashTable<CollectionType, entrysize>::HasKey;
+  return ExternalReference(Redirect(isolate, FUNCTION_ADDR(f)));
+}
+
 ExternalReference ExternalReference::try_internalize_string_function(
     Isolate* isolate) {
   return ExternalReference(Redirect(
       isolate, FUNCTION_ADDR(StringTable::LookupStringIfExists_NoAllocate)));
 }
+
+#ifdef V8_INTL_SUPPORT
+ExternalReference ExternalReference::intl_convert_one_byte_to_lower(
+    Isolate* isolate) {
+  return ExternalReference(
+      Redirect(isolate, FUNCTION_ADDR(ConvertOneByteToLower)));
+}
+
+ExternalReference ExternalReference::intl_to_latin1_lower_table(
+    Isolate* isolate) {
+  uint8_t* ptr = const_cast<uint8_t*>(ToLatin1LowerTable());
+  return ExternalReference(reinterpret_cast<Address>(ptr));
+}
+#endif  // V8_INTL_SUPPORT
 
 // Explicit instantiations for all combinations of 1- and 2-byte strings.
 template ExternalReference
@@ -1581,6 +1552,11 @@ template ExternalReference
 ExternalReference::search_string_raw<const uc16, const uint8_t>(Isolate*);
 template ExternalReference
 ExternalReference::search_string_raw<const uc16, const uc16>(Isolate*);
+
+template ExternalReference
+ExternalReference::orderedhashtable_has_raw<OrderedHashMap, 2>(Isolate*);
+template ExternalReference
+ExternalReference::orderedhashtable_has_raw<OrderedHashSet, 1>(Isolate*);
 
 ExternalReference ExternalReference::page_flags(Page* page) {
   return ExternalReference(reinterpret_cast<Address>(page) +
@@ -1933,6 +1909,17 @@ int ConstantPoolBuilder::Emit(Assembler* assm) {
   return !empty ? emitted_label_.pos() : 0;
 }
 
+HeapObjectRequest::HeapObjectRequest(double heap_number, int offset)
+    : kind_(kHeapNumber), offset_(offset) {
+  value_.heap_number = heap_number;
+  DCHECK(!IsSmiDouble(value_.heap_number));
+}
+
+HeapObjectRequest::HeapObjectRequest(CodeStub* code_stub, int offset)
+    : kind_(kCodeStub), offset_(offset) {
+  value_.code_stub = code_stub;
+  DCHECK_NOT_NULL(value_.code_stub);
+}
 
 // Platform specific but identical code for all the platforms.
 
@@ -1967,5 +1954,11 @@ void Assembler::DataAlign(int m) {
     db(0);
   }
 }
+
+void Assembler::RequestHeapObject(HeapObjectRequest request) {
+  request.set_offset(pc_offset());
+  heap_object_requests_.push_front(request);
+}
+
 }  // namespace internal
 }  // namespace v8

@@ -121,7 +121,6 @@ int CallDescriptor::CalculateFixedFrameSize() const {
       return TypedFrameConstants::kFixedSlotCount;
   }
   UNREACHABLE();
-  return 0;
 }
 
 CallDescriptor* Linkage::ComputeIncoming(Zone* zone, CompilationInfo* info) {
@@ -151,6 +150,7 @@ bool Linkage::NeedsFrameStateInput(Runtime::FunctionId function) {
     case Runtime::kDefineGetterPropertyUnchecked:  // TODO(jarin): Is it safe?
     case Runtime::kDefineSetterPropertyUnchecked:  // TODO(jarin): Is it safe?
     case Runtime::kGeneratorGetContinuation:
+    case Runtime::kIncBlockCounter:
     case Runtime::kIsFunction:
     case Runtime::kNewClosure:
     case Runtime::kNewClosure_Tenured:
@@ -176,9 +176,15 @@ bool Linkage::NeedsFrameStateInput(Runtime::FunctionId function) {
     case Runtime::kInlineFixedArrayGet:
     case Runtime::kInlineFixedArraySet:
     case Runtime::kInlineGeneratorClose:
+    case Runtime::kInlineGeneratorGetContext:
     case Runtime::kInlineGeneratorGetInputOrDebugPos:
     case Runtime::kInlineGeneratorGetResumeMode:
+    case Runtime::kInlineCreateJSGeneratorObject:
     case Runtime::kInlineIsArray:
+    case Runtime::kInlineIsJSMap:
+    case Runtime::kInlineIsJSSet:
+    case Runtime::kInlineIsJSWeakMap:
+    case Runtime::kInlineIsJSWeakSet:
     case Runtime::kInlineIsJSReceiver:
     case Runtime::kInlineIsRegExp:
     case Runtime::kInlineIsSmi:
@@ -340,11 +346,11 @@ CallDescriptor* Linkage::GetStubCallDescriptor(
     Isolate* isolate, Zone* zone, const CallInterfaceDescriptor& descriptor,
     int stack_parameter_count, CallDescriptor::Flags flags,
     Operator::Properties properties, MachineType return_type,
-    size_t return_count) {
+    size_t return_count, Linkage::ContextSpecification context_spec) {
   const int register_parameter_count = descriptor.GetRegisterParameterCount();
   const int js_parameter_count =
       register_parameter_count + stack_parameter_count;
-  const int context_count = 1;
+  const int context_count = context_spec == kPassContext ? 1 : 0;
   const size_t parameter_count =
       static_cast<size_t>(js_parameter_count + context_count);
 
@@ -376,7 +382,9 @@ CallDescriptor* Linkage::GetStubCallDescriptor(
     }
   }
   // Add context.
-  locations.AddParam(regloc(kContextRegister, MachineType::AnyTagged()));
+  if (context_count) {
+    locations.AddParam(regloc(kContextRegister, MachineType::AnyTagged()));
+  }
 
   // The target for stub calls is a code object.
   MachineType target_type = MachineType::AnyTagged();

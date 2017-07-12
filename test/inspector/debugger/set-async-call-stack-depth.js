@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-InspectorTest.log('Checks that we report not more then maxDepth call chains.');
+// TODO(kozyatinskiy): fix or remove it later with new stack traces it's almost
+// imposible to hit limit.
+let {session, contextGroup, Protocol} = InspectorTest.start('Checks that we report not more then maxDepth call chains.');
 
-InspectorTest.addScript(`
+contextGroup.addScript(`
 function promisesChain(num) {
   var p = Promise.resolve();
   for (var i = 0; i < num - 1; ++i) {

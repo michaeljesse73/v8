@@ -107,7 +107,6 @@ size_t Interpreter::GetDispatchTableIndex(Bytecode bytecode,
       return index + 2 * kEntriesPerOperandScale;
   }
   UNREACHABLE();
-  return 0;
 }
 
 void Interpreter::IterateDispatchTable(RootVisitor* v) {
@@ -159,8 +158,7 @@ InterpreterCompilationJob::Status InterpreterCompilationJob::PrepareJobImpl() {
     OFStream os(stdout);
     std::unique_ptr<char[]> name = info()->GetDebugName();
     os << "[generating bytecode for function: " << info()->GetDebugName().get()
-       << "]" << std::endl
-       << std::flush;
+       << "]" << std::endl;
   }
 
   return SUCCEEDED;
@@ -199,7 +197,7 @@ InterpreterCompilationJob::Status InterpreterCompilationJob::FinalizeJobImpl() {
 
   if (print_bytecode_) {
     OFStream os(stdout);
-    bytecodes->Print(os);
+    bytecodes->Disassemble(os);
     os << std::flush;
   }
 

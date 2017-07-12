@@ -1,3 +1,4 @@
+Tests stepping through wasm scripts
 Installing code an global variable.
 Calling instantiate function.
 Waiting for two wasm scripts to be parsed.
@@ -36,7 +37,7 @@ at wasm_B (7:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 4 (number)
+   locals: {"arg#0":4} (Object)
    stack: {"0":3} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -47,7 +48,7 @@ at wasm_B (8:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 3 (number)
+   locals: {"arg#0":3} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -63,7 +64,7 @@ at wasm_B (8:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 3 (number)
+   locals: {"arg#0":3} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -79,7 +80,7 @@ at wasm_B (8:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 3 (number)
+   locals: {"arg#0":3} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -90,7 +91,7 @@ at wasm_B (9:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 3 (number)
+   locals: {"arg#0":3} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -101,7 +102,7 @@ at wasm_B (7:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 3 (number)
+   locals: {"arg#0":3} (Object)
    stack: {"0":2} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -112,7 +113,7 @@ at wasm_B (8:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 2 (number)
+   locals: {"arg#0":2} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -123,7 +124,7 @@ at wasm_B (9:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 2 (number)
+   locals: {"arg#0":2} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -134,7 +135,7 @@ at wasm_B (7:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 2 (number)
+   locals: {"arg#0":2} (Object)
    stack: {"0":1} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -145,7 +146,7 @@ at wasm_B (8:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 1 (number)
+   locals: {"arg#0":1} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -161,7 +162,7 @@ at wasm_B (8:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 1 (number)
+   locals: {"arg#0":1} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -172,7 +173,7 @@ at wasm_B (9:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 1 (number)
+   locals: {"arg#0":1} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -183,7 +184,7 @@ at wasm_B (1:2):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 1 (number)
+   locals: {"arg#0":1} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -194,7 +195,7 @@ at wasm_B (2:4):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 1 (number)
+   locals: {"arg#0":1} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -205,7 +206,7 @@ at wasm_B (3:4):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 1 (number)
+   locals: {"arg#0":1} (Object)
    stack: {"0":1} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -216,7 +217,7 @@ at wasm_B (4:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 1 (number)
+   locals: {"arg#0":1} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -227,7 +228,7 @@ at wasm_B (5:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 1 (number)
+   locals: {"arg#0":1} (Object)
    stack: {"0":1} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -238,7 +239,7 @@ at wasm_B (6:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 1 (number)
+   locals: {"arg#0":1} (Object)
    stack: {"0":1,"1":1} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -249,7 +250,7 @@ at wasm_B (7:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 1 (number)
+   locals: {"arg#0":1} (Object)
    stack: {"0":0} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -260,7 +261,7 @@ at wasm_B (8:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 0 (number)
+   locals: {"arg#0":0} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -276,7 +277,7 @@ at wasm_B (8:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 0 (number)
+   locals: {"arg#0":0} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -292,7 +293,7 @@ at wasm_B (8:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 0 (number)
+   locals: {"arg#0":0} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -308,7 +309,7 @@ at wasm_B (8:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 0 (number)
+   locals: {"arg#0":0} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):
@@ -319,7 +320,7 @@ at wasm_B (9:6):
  - scope (global):
    -- skipped
  - scope (local):
-   param#0: 0 (number)
+   locals: {"arg#0":0} (Object)
    stack: {} (Object)
 at (anonymous) (0:17):
  - scope (global):

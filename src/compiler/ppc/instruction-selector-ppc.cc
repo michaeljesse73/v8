@@ -174,6 +174,14 @@ void VisitBinop(InstructionSelector* selector, Node* node,
 
 }  // namespace
 
+void InstructionSelector::VisitStackSlot(Node* node) {
+  StackSlotRepresentation rep = StackSlotRepresentationOf(node->op());
+  int slot = frame_->AllocateSpillSlot(rep.size());
+  OperandGenerator g(this);
+
+  Emit(kArchStackSlot, g.DefineAsRegister(node),
+       sequence()->AddImmediate(Constant(slot)), 0, nullptr);
+}
 
 void InstructionSelector::VisitLoad(Node* node) {
   LoadRepresentation load_rep = LoadRepresentationOf(node->op());
@@ -216,9 +224,6 @@ void InstructionSelector::VisitLoad(Node* node) {
     case MachineRepresentation::kWord64:  // Fall through.
 #endif
     case MachineRepresentation::kSimd128:  // Fall through.
-    case MachineRepresentation::kSimd1x4:  // Fall through.
-    case MachineRepresentation::kSimd1x8:  // Fall through.
-    case MachineRepresentation::kSimd1x16:  // Fall through.
     case MachineRepresentation::kNone:
       UNREACHABLE();
       return;
@@ -328,9 +333,6 @@ void InstructionSelector::VisitStore(Node* node) {
       case MachineRepresentation::kWord64:  // Fall through.
 #endif
       case MachineRepresentation::kSimd128:  // Fall through.
-      case MachineRepresentation::kSimd1x4:  // Fall through.
-      case MachineRepresentation::kSimd1x8:  // Fall through.
-      case MachineRepresentation::kSimd1x16:  // Fall through.
       case MachineRepresentation::kNone:
         UNREACHABLE();
         return;
@@ -395,9 +397,6 @@ void InstructionSelector::VisitCheckedLoad(Node* node) {
     case MachineRepresentation::kWord64:  // Fall through.
 #endif
     case MachineRepresentation::kSimd128:  // Fall through.
-    case MachineRepresentation::kSimd1x4:  // Fall through.
-    case MachineRepresentation::kSimd1x8:  // Fall through.
-    case MachineRepresentation::kSimd1x16:  // Fall through.
     case MachineRepresentation::kNone:
       UNREACHABLE();
       return;
@@ -446,9 +445,6 @@ void InstructionSelector::VisitCheckedStore(Node* node) {
     case MachineRepresentation::kWord64:  // Fall through.
 #endif
     case MachineRepresentation::kSimd128:  // Fall through.
-    case MachineRepresentation::kSimd1x4:  // Fall through.
-    case MachineRepresentation::kSimd1x8:  // Fall through.
-    case MachineRepresentation::kSimd1x16:  // Fall through.
     case MachineRepresentation::kNone:
       UNREACHABLE();
       return;
@@ -1536,7 +1532,6 @@ static bool CompareLogical(FlagsContinuation* cont) {
       return false;
   }
   UNREACHABLE();
-  return false;
 }
 
 

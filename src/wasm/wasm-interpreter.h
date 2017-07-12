@@ -77,7 +77,6 @@ struct WasmVal {
     FOREACH_UNION_MEMBER(CHECK_VAL_EQ)
 #undef CHECK_VAL_EQ
     UNREACHABLE();
-    return false;
   }
 
   template <typename T>
@@ -91,7 +90,7 @@ struct WasmVal {
   }
 };
 
-#define DECLARE_CAST(field, localtype, ctype)  \
+#define DECLARE_CASTS(field, localtype, ctype) \
   template <>                                  \
   inline ctype WasmVal::to_unchecked() const { \
     return val.field;                          \
@@ -101,7 +100,7 @@ struct WasmVal {
     CHECK_EQ(localtype, type);                 \
     return val.field;                          \
   }
-FOREACH_UNION_MEMBER(DECLARE_CAST)
+FOREACH_UNION_MEMBER(DECLARE_CASTS)
 #undef DECLARE_CAST
 
 // Representation of frames within the interpreter.
@@ -138,7 +137,7 @@ class InterpretedFrame {
   DISALLOW_COPY_AND_ASSIGN(InterpretedFrame);
 };
 
-// An interpreter capable of executing WASM.
+// An interpreter capable of executing WebAssembly.
 class V8_EXPORT_PRIVATE WasmInterpreter {
  public:
   // State machine for a Thread:

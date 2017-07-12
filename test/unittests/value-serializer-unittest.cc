@@ -1603,6 +1603,44 @@ TEST_F(ValueSerializerTest, DecodeRegExp) {
       });
 }
 
+// Tests that invalid flags are not accepted by the deserializer. In particular,
+// the dotAll flag ('s') is only valid when the corresponding flag is enabled.
+TEST_F(ValueSerializerTest, DecodeRegExpDotAll) {
+  i::FLAG_harmony_regexp_dotall = false;
+  DecodeTest({0xff, 0x09, 0x3f, 0x00, 0x52, 0x03, 0x66, 0x6f, 0x6f, 0x1f},
+             [this](Local<Value> value) {
+               ASSERT_TRUE(value->IsRegExp());
+               EXPECT_TRUE(EvaluateScriptForResultBool(
+                   "Object.getPrototypeOf(result) === RegExp.prototype"));
+               EXPECT_TRUE(EvaluateScriptForResultBool(
+                   "result.toString() === '/foo/gimuy'"));
+             });
+  InvalidDecodeTest(
+      {0xff, 0x09, 0x3f, 0x00, 0x52, 0x03, 0x66, 0x6f, 0x6f, 0x3f});
+  InvalidDecodeTest(
+      {0xff, 0x09, 0x3f, 0x00, 0x52, 0x03, 0x66, 0x6f, 0x6f, 0x7f});
+
+  i::FLAG_harmony_regexp_dotall = true;
+  DecodeTest({0xff, 0x09, 0x3f, 0x00, 0x52, 0x03, 0x66, 0x6f, 0x6f, 0x1f},
+             [this](Local<Value> value) {
+               ASSERT_TRUE(value->IsRegExp());
+               EXPECT_TRUE(EvaluateScriptForResultBool(
+                   "Object.getPrototypeOf(result) === RegExp.prototype"));
+               EXPECT_TRUE(EvaluateScriptForResultBool(
+                   "result.toString() === '/foo/gimuy'"));
+             });
+  DecodeTest({0xff, 0x09, 0x3f, 0x00, 0x52, 0x03, 0x66, 0x6f, 0x6f, 0x3f},
+             [this](Local<Value> value) {
+               ASSERT_TRUE(value->IsRegExp());
+               EXPECT_TRUE(EvaluateScriptForResultBool(
+                   "Object.getPrototypeOf(result) === RegExp.prototype"));
+               EXPECT_TRUE(EvaluateScriptForResultBool(
+                   "result.toString() === '/foo/gimsuy'"));
+             });
+  InvalidDecodeTest(
+      {0xff, 0x09, 0x3f, 0x00, 0x52, 0x03, 0x66, 0x6f, 0x6f, 0x7f});
+}
+
 TEST_F(ValueSerializerTest, RoundTripMap) {
   RoundTripTest(
       "(() => { var m = new Map(); m.set(42, 'foo'); return m; })()",
@@ -1856,7 +1894,11 @@ class OOMArrayBufferAllocator : public ArrayBuffer::Allocator {
  public:
   void* Allocate(size_t) override { return nullptr; }
   void* AllocateUninitialized(size_t) override { return nullptr; }
+  void* Reserve(size_t length) override { return nullptr; }
+  void Free(void* data, size_t length, AllocationMode mode) override {}
   void Free(void*, size_t) override {}
+  void SetProtection(void* data, size_t length,
+                     Protection protection) override {}
 };
 
 TEST_F(ValueSerializerTest, DecodeArrayBufferOOM) {

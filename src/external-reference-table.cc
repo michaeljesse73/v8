@@ -246,10 +246,18 @@ void ExternalReferenceTable::AddReferences(Isolate* isolate) {
       "libc_memchr");
   Add(ExternalReference::libc_memcpy_function(isolate).address(),
       "libc_memcpy");
+  Add(ExternalReference::libc_memmove_function(isolate).address(),
+      "libc_memmove");
   Add(ExternalReference::libc_memset_function(isolate).address(),
       "libc_memset");
   Add(ExternalReference::try_internalize_string_function(isolate).address(),
       "try_internalize_string_function");
+#ifdef V8_INTL_SUPPORT
+  Add(ExternalReference::intl_convert_one_byte_to_lower(isolate).address(),
+      "intl_convert_one_byte_to_lower");
+  Add(ExternalReference::intl_to_latin1_lower_table(isolate).address(),
+      "intl_to_latin1_lower_table");
+#endif  // V8_INTL_SUPPORT
   Add(ExternalReference::search_string_raw<const uint8_t, const uint8_t>(
           isolate)
           .address(),
@@ -263,6 +271,14 @@ void ExternalReferenceTable::AddReferences(Isolate* isolate) {
   Add(ExternalReference::search_string_raw<const uc16, const uc16>(isolate)
           .address(),
       "search_string_raw<1-byte, 2-byte>");
+  Add(ExternalReference::orderedhashmap_gethash_raw(isolate).address(),
+      "orderedhashmap_gethash_raw");
+  Add(ExternalReference::orderedhashtable_has_raw<OrderedHashMap, 2>(isolate)
+          .address(),
+      "orderedhashtable_has_raw<OrderedHashMap, 2>");
+  Add(ExternalReference::orderedhashtable_has_raw<OrderedHashSet, 1>(isolate)
+          .address(),
+      "orderedhashtable_has_raw<OrderedHashSet, 1>");
   Add(ExternalReference::log_enter_external_function(isolate).address(),
       "Logger::EnterExternal");
   Add(ExternalReference::log_leave_external_function(isolate).address(),
@@ -392,8 +408,8 @@ void ExternalReferenceTable::AddIsolateAddresses(Isolate* isolate) {
 #undef BUILD_NAME_LITERAL
   };
 
-  for (int i = 0; i < Isolate::kIsolateAddressCount; ++i) {
-    Add(isolate->get_address_from_id(static_cast<Isolate::AddressId>(i)),
+  for (int i = 0; i < IsolateAddressId::kIsolateAddressCount; ++i) {
+    Add(isolate->get_address_from_id(static_cast<IsolateAddressId>(i)),
         address_names[i]);
   }
 }

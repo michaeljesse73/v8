@@ -5,17 +5,19 @@
 #ifndef V8_ASMJS_ASM_PARSER_H_
 #define V8_ASMJS_ASM_PARSER_H_
 
+#include <memory>
 #include <string>
-#include <vector>
 
 #include "src/asmjs/asm-scanner.h"
-#include "src/asmjs/asm-typer.h"
 #include "src/asmjs/asm-types.h"
 #include "src/wasm/wasm-module-builder.h"
 #include "src/zone/zone-containers.h"
 
 namespace v8 {
 namespace internal {
+
+class Utf16CharacterStream;
+
 namespace wasm {
 
 // A custom parser + validator + wasm converter for asm.js:
@@ -29,13 +31,31 @@ namespace wasm {
 //   scopes (local + module wide).
 class AsmJsParser {
  public:
-  explicit AsmJsParser(Isolate* isolate, Zone* zone, Handle<Script> script,
-                       int start, int end);
+  // clang-format off
+  enum StandardMember {
+    kInfinity,
+    kNaN,
+#define V(_unused1, name, _unused2, _unused3) kMath##name,
+    STDLIB_MATH_FUNCTION_LIST(V)
+#undef V
+#define V(name, _unused1) kMath##name,
+    STDLIB_MATH_VALUE_LIST(V)
+#undef V
+#define V(name, _unused1, _unused2, _unused3) k##name,
+    STDLIB_ARRAY_TYPE_LIST(V)
+#undef V
+  };
+  // clang-format on
+
+  typedef std::unordered_set<StandardMember, std::hash<int>> StdlibSet;
+
+  explicit AsmJsParser(Zone* zone, uintptr_t stack_limit,
+                       std::unique_ptr<Utf16CharacterStream> stream);
   bool Run();
   const char* failure_message() const { return failure_message_; }
   int failure_location() const { return failure_location_; }
   WasmModuleBuilder* module_builder() { return module_builder_; }
-  const AsmTyper::StdlibSet* stdlib_uses() const { return &stdlib_uses_; }
+  const StdlibSet* stdlib_uses() const { return &stdlib_uses_; }
 
  private:
   // clang-format off
@@ -62,16 +82,14 @@ class AsmJsParser {
   };
 
   struct VarInfo {
-    AsmType* type;
-    WasmFunctionBuilder* function_builder;
-    FunctionImportInfo* import;
-    int32_t mask;
-    uint32_t index;
-    VarKind kind;
-    bool mutable_variable;
-    bool function_defined;
-
-    VarInfo();
+    AsmType* type = AsmType::None();
+    WasmFunctionBuilder* function_builder = nullptr;
+    FunctionImportInfo* import = nullptr;
+    uint32_t mask = 0;
+    uint32_t index = 0;
+    VarKind kind = VarKind::kUnused;
+    bool mutable_variable = true;
+    bool function_defined = false;
   };
 
   struct GlobalImport {
@@ -90,15 +108,55 @@ class AsmJsParser {
   // Helper class to make {TempVariable} safe for nesting.
   class TemporaryVariableScope;
 
+  template <typename T>
+  class CachedVectors {
+   public:
+    explicit CachedVectors(Zone* zone) : reusable_vectors_(zone) {}
+
+    Zone* zone() const { return reusable_vectors_.get_allocator().zone(); }
+
+    inline void fill(ZoneVector<T>* vec) {
+      if (reusable_vectors_.empty()) return;
+      reusable_vectors_.back().swap(*vec);
+      reusable_vectors_.pop_back();
+      vec->clear();
+    }
+
+    inline void reuse(ZoneVector<T>* vec) {
+      reusable_vectors_.emplace_back(std::move(*vec));
+    }
+
+   private:
+    ZoneVector<ZoneVector<T>> reusable_vectors_;
+  };
+
+  template <typename T>
+  class CachedVector final : public ZoneVector<T> {
+   public:
+    explicit CachedVector(CachedVectors<T>& cache)
+        : ZoneVector<T>(cache.zone()), cache_(&cache) {
+      cache.fill(this);
+    }
+    ~CachedVector() { cache_->reuse(this); }
+
+   private:
+    CachedVectors<T>* cache_;
+  };
+
   Zone* zone_;
   AsmJsScanner scanner_;
   WasmModuleBuilder* module_builder_;
   WasmFunctionBuilder* current_function_builder_;
   AsmType* return_type_;
   uintptr_t stack_limit_;
-  AsmTyper::StdlibSet stdlib_uses_;
+  StdlibSet stdlib_uses_;
   ZoneVector<VarInfo> global_var_info_;
   ZoneVector<VarInfo> local_var_info_;
+
+  CachedVectors<ValueType> cached_valuetype_vectors_{zone_};
+  CachedVectors<AsmType*> cached_asm_type_p_vectors_{zone_};
+  CachedVectors<AsmJsScanner::token_t> cached_token_t_vectors_{zone_};
+  CachedVectors<int32_t> cached_int_vectors_{zone_};
 
   int function_temp_locals_offset_;
   int function_temp_locals_used_;
@@ -252,14 +310,13 @@ class AsmJsParser {
   void InitializeStdlibTypes();
 
   FunctionSig* ConvertSignature(AsmType* return_type,
-                                const std::vector<AsmType*>& params);
+                                const ZoneVector<AsmType*>& params);
 
-  // 6.1 ValidateModule
-  void ValidateModule();
-  void ValidateModuleParameters();
-  void ValidateModuleVars();
+  void ValidateModule();            // 6.1 ValidateModule
+  void ValidateModuleParameters();  // 6.1 ValidateModule - parameters
+  void ValidateModuleVars();        // 6.1 ValidateModule - variables
   void ValidateModuleVar(bool mutable_variable);
-  bool ValidateModuleVarImport(VarInfo* info, bool mutable_variable);
+  void ValidateModuleVarImport(VarInfo* info, bool mutable_variable);
   void ValidateModuleVarStdlib(VarInfo* info);
   void ValidateModuleVarNewStdlib(VarInfo* info);
   void ValidateModuleVarFromGlobal(VarInfo* info, bool mutable_variable);
@@ -267,10 +324,10 @@ class AsmJsParser {
   void ValidateExport();         // 6.2 ValidateExport
   void ValidateFunctionTable();  // 6.3 ValidateFunctionTable
   void ValidateFunction();       // 6.4 ValidateFunction
-  void ValidateFunctionParams(std::vector<AsmType*>* params);
+  void ValidateFunctionParams(ZoneVector<AsmType*>* params);
   void ValidateFunctionLocals(size_t param_count,
-                              std::vector<ValueType>* locals);
-  void ValidateStatement();              // ValidateStatement
+                              ZoneVector<ValueType>* locals);
+  void ValidateStatement();              // 6.5 ValidateStatement
   void Block();                          // 6.5.1 Block
   void ExpressionStatement();            // 6.5.2 ExpressionStatement
   void EmptyStatement();                 // 6.5.3 EmptyStatement
@@ -317,7 +374,7 @@ class AsmJsParser {
   // Used as part of {SwitchStatement}. Collects all case labels in the current
   // switch-statement, then resets the scanner position. This is one piece that
   // makes this parser not be a pure single-pass.
-  void GatherCases(std::vector<int32_t>* cases);
+  void GatherCases(ZoneVector<int32_t>* cases);
 };
 
 }  // namespace wasm

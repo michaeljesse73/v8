@@ -212,6 +212,14 @@ void VisitFloatUnop(InstructionSelector* selector, Node* node, Node* input,
 
 }  // namespace
 
+void InstructionSelector::VisitStackSlot(Node* node) {
+  StackSlotRepresentation rep = StackSlotRepresentationOf(node->op());
+  int slot = frame_->AllocateSpillSlot(rep.size());
+  OperandGenerator g(this);
+
+  Emit(kArchStackSlot, g.DefineAsRegister(node),
+       sequence()->AddImmediate(Constant(slot)), 0, nullptr);
+}
 
 void InstructionSelector::VisitLoad(Node* node) {
   LoadRepresentation load_rep = LoadRepresentationOf(node->op());
@@ -239,9 +247,6 @@ void InstructionSelector::VisitLoad(Node* node) {
       break;
     case MachineRepresentation::kWord64:   // Fall through.
     case MachineRepresentation::kSimd128:  // Fall through.
-    case MachineRepresentation::kSimd1x4:  // Fall through.
-    case MachineRepresentation::kSimd1x8:  // Fall through.
-    case MachineRepresentation::kSimd1x16:  // Fall through.
     case MachineRepresentation::kNone:
       UNREACHABLE();
       return;
@@ -332,9 +337,6 @@ void InstructionSelector::VisitStore(Node* node) {
         break;
       case MachineRepresentation::kWord64:   // Fall through.
       case MachineRepresentation::kSimd128:  // Fall through.
-      case MachineRepresentation::kSimd1x4:  // Fall through.
-      case MachineRepresentation::kSimd1x8:  // Fall through.
-      case MachineRepresentation::kSimd1x16:  // Fall through.
       case MachineRepresentation::kNone:
         UNREACHABLE();
         return;
@@ -402,9 +404,6 @@ void InstructionSelector::VisitCheckedLoad(Node* node) {
     case MachineRepresentation::kTagged:         // Fall through.
     case MachineRepresentation::kWord64:         // Fall through.
     case MachineRepresentation::kSimd128:        // Fall through.
-    case MachineRepresentation::kSimd1x4:        // Fall through.
-    case MachineRepresentation::kSimd1x8:        // Fall through.
-    case MachineRepresentation::kSimd1x16:       // Fall through.
     case MachineRepresentation::kNone:
       UNREACHABLE();
       return;
@@ -478,9 +477,6 @@ void InstructionSelector::VisitCheckedStore(Node* node) {
     case MachineRepresentation::kTagged:         // Fall through.
     case MachineRepresentation::kWord64:         // Fall through.
     case MachineRepresentation::kSimd128:        // Fall through.
-    case MachineRepresentation::kSimd1x4:        // Fall through.
-    case MachineRepresentation::kSimd1x8:        // Fall through.
-    case MachineRepresentation::kSimd1x16:       // Fall through.
     case MachineRepresentation::kNone:
       UNREACHABLE();
       return;
@@ -892,9 +888,7 @@ void InstructionSelector::VisitWord32Ror(Node* node) {
   V(Float32Mul, kAVXFloat32Mul, kSSEFloat32Mul) \
   V(Float64Mul, kAVXFloat64Mul, kSSEFloat64Mul) \
   V(Float32Div, kAVXFloat32Div, kSSEFloat32Div) \
-  V(Float64Div, kAVXFloat64Div, kSSEFloat64Div) \
-  V(I32x4Add, kAVXI32x4Add, kSSEI32x4Add)       \
-  V(I32x4Sub, kAVXI32x4Sub, kSSEI32x4Sub)
+  V(Float64Div, kAVXFloat64Div, kSSEFloat64Div)
 
 #define FLOAT_UNOP_LIST(V)                      \
   V(Float32Abs, kAVXFloat32Abs, kSSEFloat32Abs) \
@@ -1897,24 +1891,55 @@ VISIT_ATOMIC_BINOP(Or)
 VISIT_ATOMIC_BINOP(Xor)
 #undef VISIT_ATOMIC_BINOP
 
-void InstructionSelector::VisitI32x4Splat(Node* node) {
-  VisitRO(this, node, kIA32I32x4Splat);
-}
+#define SIMD_TYPES(V) \
+  V(I32x4)            \
+  V(I16x8)            \
+  V(I8x16)
 
-void InstructionSelector::VisitI32x4ExtractLane(Node* node) {
-  IA32OperandGenerator g(this);
-  int32_t lane = OpParameter<int32_t>(node);
-  Emit(kIA32I32x4ExtractLane, g.DefineAsRegister(node),
-       g.UseRegister(node->InputAt(0)), g.UseImmediate(lane));
-}
+#define SIMD_BINOP_LIST(V) \
+  V(I32x4Add)              \
+  V(I32x4Sub)
 
-void InstructionSelector::VisitI32x4ReplaceLane(Node* node) {
-  IA32OperandGenerator g(this);
-  int32_t lane = OpParameter<int32_t>(node);
-  Emit(kIA32I32x4ReplaceLane, g.DefineSameAsFirst(node),
-       g.UseRegister(node->InputAt(0)), g.UseImmediate(lane),
-       g.Use(node->InputAt(1)));
-}
+#define VISIT_SIMD_SPLAT(Type)                               \
+  void InstructionSelector::Visit##Type##Splat(Node* node) { \
+    VisitRO(this, node, kIA32##Type##Splat);                 \
+  }
+SIMD_TYPES(VISIT_SIMD_SPLAT)
+#undef VISIT_SIMD_SPLAT
+
+#define VISIT_SIMD_EXTRACT_LANE(Type)                              \
+  void InstructionSelector::Visit##Type##ExtractLane(Node* node) { \
+    IA32OperandGenerator g(this);                                  \
+    int32_t lane = OpParameter<int32_t>(node);                     \
+    Emit(kIA32##Type##ExtractLane, g.DefineAsRegister(node),       \
+         g.UseRegister(node->InputAt(0)), g.UseImmediate(lane));   \
+  }
+SIMD_TYPES(VISIT_SIMD_EXTRACT_LANE)
+#undef VISIT_SIMD_EXTRACT_LANE
+
+#define VISIT_SIMD_REPLACE_LANE(Type)                                         \
+  void InstructionSelector::Visit##Type##ReplaceLane(Node* node) {            \
+    IA32OperandGenerator g(this);                                             \
+    InstructionOperand operand0 = g.UseRegister(node->InputAt(0));            \
+    InstructionOperand operand1 = g.UseImmediate(OpParameter<int32_t>(node)); \
+    InstructionOperand operand2 = g.Use(node->InputAt(1));                    \
+    if (IsSupported(AVX)) {                                                   \
+      Emit(kAVX##Type##ReplaceLane, g.DefineAsRegister(node), operand0,       \
+           operand1, operand2);                                               \
+    } else {                                                                  \
+      Emit(kSSE##Type##ReplaceLane, g.DefineSameAsFirst(node), operand0,      \
+           operand1, operand2);                                               \
+    }                                                                         \
+  }
+SIMD_TYPES(VISIT_SIMD_REPLACE_LANE)
+#undef VISIT_SIMD_REPLACE_LANE
+
+#define VISIT_SIMD_BINOP(Opcode)                           \
+  void InstructionSelector::Visit##Opcode(Node* node) {    \
+    VisitRROFloat(this, node, kAVX##Opcode, kSSE##Opcode); \
+  }
+SIMD_BINOP_LIST(VISIT_SIMD_BINOP)
+#undef VISIT_SIMD_BINOP
 
 void InstructionSelector::VisitInt32AbsWithOverflow(Node* node) {
   UNREACHABLE();

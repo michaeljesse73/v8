@@ -9,6 +9,7 @@
 #include "src/base/bits.h"
 #include "src/bootstrapper.h"
 #include "src/codegen.h"
+#include "src/double.h"
 #include "src/ic/handler-compiler.h"
 #include "src/ic/ic.h"
 #include "src/ic/stub-cache.h"
@@ -39,29 +40,6 @@ static void EmitSmiNonsmiComparison(MacroAssembler* masm, Register lhs,
                                     Label* slow, bool strict);
 static void EmitStrictTwoHeapObjectCompare(MacroAssembler* masm, Register lhs,
                                            Register rhs);
-
-
-void HydrogenCodeStub::GenerateLightweightMiss(MacroAssembler* masm,
-                                               ExternalReference miss) {
-  // Update the static counter each time a new code stub is generated.
-  isolate()->counters()->code_stubs()->Increment();
-
-  CallInterfaceDescriptor descriptor = GetCallInterfaceDescriptor();
-  int param_count = descriptor.GetRegisterParameterCount();
-  {
-    // Call the runtime system in a fresh internal frame.
-    FrameAndConstantPoolScope scope(masm, StackFrame::INTERNAL);
-    DCHECK(param_count == 0 ||
-           r3.is(descriptor.GetRegisterParameter(param_count - 1)));
-    // Push arguments
-    for (int i = 0; i < param_count; ++i) {
-      __ push(descriptor.GetRegisterParameter(i));
-    }
-    __ CallExternalReference(miss, param_count);
-  }
-
-  __ Ret();
-}
 
 
 void DoubleToIStub::Generate(MacroAssembler* masm) {
@@ -836,14 +814,11 @@ bool CEntryStub::NeedsImmovableCode() { return true; }
 void CodeStub::GenerateStubsAheadOfTime(Isolate* isolate) {
   CEntryStub::GenerateAheadOfTime(isolate);
   StoreBufferOverflowStub::GenerateFixedRegStubsAheadOfTime(isolate);
-  StubFailureTrampolineStub::GenerateAheadOfTime(isolate);
   CommonArrayConstructorStub::GenerateStubsAheadOfTime(isolate);
   CreateAllocationSiteStub::GenerateAheadOfTime(isolate);
   CreateWeakCellStub::GenerateAheadOfTime(isolate);
-  BinaryOpICStub::GenerateAheadOfTime(isolate);
   StoreRegistersStateStub::GenerateAheadOfTime(isolate);
   RestoreRegistersStateStub::GenerateAheadOfTime(isolate);
-  BinaryOpICWithAllocationSiteStub::GenerateAheadOfTime(isolate);
   StoreFastElementStub::GenerateAheadOfTime(isolate);
 }
 
@@ -977,7 +952,7 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   if (FLAG_debug_code) {
     Label okay;
     ExternalReference pending_exception_address(
-        Isolate::kPendingExceptionAddress, isolate());
+        IsolateAddressId::kPendingExceptionAddress, isolate());
 
     __ mov(r6, Operand(pending_exception_address));
     __ LoadP(r6, MemOperand(r6));
@@ -1007,15 +982,15 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   __ bind(&exception_returned);
 
   ExternalReference pending_handler_context_address(
-      Isolate::kPendingHandlerContextAddress, isolate());
+      IsolateAddressId::kPendingHandlerContextAddress, isolate());
   ExternalReference pending_handler_code_address(
-      Isolate::kPendingHandlerCodeAddress, isolate());
+      IsolateAddressId::kPendingHandlerCodeAddress, isolate());
   ExternalReference pending_handler_offset_address(
-      Isolate::kPendingHandlerOffsetAddress, isolate());
+      IsolateAddressId::kPendingHandlerOffsetAddress, isolate());
   ExternalReference pending_handler_fp_address(
-      Isolate::kPendingHandlerFPAddress, isolate());
+      IsolateAddressId::kPendingHandlerFPAddress, isolate());
   ExternalReference pending_handler_sp_address(
-      Isolate::kPendingHandlerSPAddress, isolate());
+      IsolateAddressId::kPendingHandlerSPAddress, isolate());
 
   // Ask the runtime for help to determine the handler. This will set r3 to
   // contain the current pending exception, don't clobber it.
@@ -1086,7 +1061,7 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   // Save callee-saved double registers.
   __ MultiPushDoubles(kCalleeSavedDoubles);
   // Set up the reserved register for 0.0.
-  __ LoadDoubleLiteral(kDoubleRegZero, 0.0, r0);
+  __ LoadDoubleLiteral(kDoubleRegZero, Double(0.0), r0);
 
   // Push a frame with special values setup to mark it as an entry frame.
   // r3: code entry
@@ -1105,7 +1080,8 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   __ push(r0);
   __ push(r0);
   // Save copies of the top frame descriptor on the stack.
-  __ mov(r8, Operand(ExternalReference(Isolate::kCEntryFPAddress, isolate())));
+  __ mov(r8, Operand(ExternalReference(IsolateAddressId::kCEntryFPAddress,
+                                       isolate())));
   __ LoadP(r0, MemOperand(r8));
   __ push(r0);
 
@@ -1114,7 +1090,7 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
 
   // If this is the outermost JS call, set js_entry_sp value.
   Label non_outermost_js;
-  ExternalReference js_entry_sp(Isolate::kJSEntrySPAddress, isolate());
+  ExternalReference js_entry_sp(IsolateAddressId::kJSEntrySPAddress, isolate());
   __ mov(r8, Operand(ExternalReference(js_entry_sp)));
   __ LoadP(r9, MemOperand(r8));
   __ cmpi(r9, Operand::Zero());
@@ -1138,8 +1114,8 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
   // field in the JSEnv and return a failure sentinel.  Coming in here the
   // fp will be invalid because the PushStackHandler below sets it to 0 to
   // signal the existence of the JSEntry frame.
-  __ mov(ip, Operand(ExternalReference(Isolate::kPendingExceptionAddress,
-                                       isolate())));
+  __ mov(ip, Operand(ExternalReference(
+                 IsolateAddressId::kPendingExceptionAddress, isolate())));
 
   __ StoreP(r3, MemOperand(ip));
   __ LoadRoot(r3, Heap::kExceptionRootIndex);
@@ -1196,7 +1172,8 @@ void JSEntryStub::Generate(MacroAssembler* masm) {
 
   // Restore the top frame descriptors from the stack.
   __ pop(r6);
-  __ mov(ip, Operand(ExternalReference(Isolate::kCEntryFPAddress, isolate())));
+  __ mov(ip, Operand(ExternalReference(IsolateAddressId::kCEntryFPAddress,
+                                       isolate())));
   __ StoreP(r6, MemOperand(ip));
 
   // Reset the stack to the callee saved registers.
@@ -1588,37 +1565,6 @@ void StringHelper::GenerateOneByteCharsCompareLoop(
   __ addi(index, index, Operand(1));
   __ cmpi(index, Operand::Zero());
   __ bne(&loop);
-}
-
-
-void BinaryOpICWithAllocationSiteStub::Generate(MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- r4    : left
-  //  -- r3    : right
-  //  -- lr    : return address
-  // -----------------------------------
-
-  // Load r5 with the allocation site.  We stick an undefined dummy value here
-  // and replace it with the real allocation site later when we instantiate this
-  // stub in BinaryOpICWithAllocationSiteStub::GetCodeCopyFromTemplate().
-  __ Move(r5, isolate()->factory()->undefined_value());
-
-  // Make sure that we actually patched the allocation site.
-  if (FLAG_debug_code) {
-    __ TestIfSmi(r5, r0);
-    __ Assert(ne, kExpectedAllocationSite, cr0);
-    __ push(r5);
-    __ LoadP(r5, FieldMemOperand(r5, HeapObject::kMapOffset));
-    __ LoadRoot(ip, Heap::kAllocationSiteMapRootIndex);
-    __ cmp(r5, ip);
-    __ pop(r5);
-    __ Assert(eq, kExpectedAllocationSite);
-  }
-
-  // Tail call into the stub that handles binary operations with allocation
-  // sites.
-  BinaryOpWithAllocationSiteStub stub(isolate(), state());
-  __ TailCallStub(&stub);
 }
 
 
@@ -2302,9 +2248,10 @@ void RecordWriteStub::InformIncrementalMarker(MacroAssembler* masm) {
 void RecordWriteStub::CheckNeedsToInformIncrementalMarker(
     MacroAssembler* masm, OnNoNeedToInformIncrementalMarker on_no_need,
     Mode mode) {
-  Label on_black;
   Label need_incremental;
   Label need_incremental_pop_scratch;
+#ifndef V8_CONCURRENT_MARKING
+  Label on_black;
 
   // Let's look at the color of the object:  If it is not black we don't have
   // to inform the incremental marker.
@@ -2319,6 +2266,7 @@ void RecordWriteStub::CheckNeedsToInformIncrementalMarker(
   }
 
   __ bind(&on_black);
+#endif
 
   // Get the value from the slot.
   __ LoadP(regs_.scratch0(), MemOperand(regs_.address(), 0));
@@ -2365,20 +2313,23 @@ void RecordWriteStub::CheckNeedsToInformIncrementalMarker(
   // Fall through when we need to inform the incremental marker.
 }
 
-
-void StubFailureTrampolineStub::Generate(MacroAssembler* masm) {
-  CEntryStub ces(isolate(), 1, kSaveFPRegs);
-  __ Call(ces.GetCode(), RelocInfo::CODE_TARGET);
-  int parameter_count_offset =
-      StubFailureTrampolineFrameConstants::kArgumentsLengthOffset;
-  __ LoadP(r4, MemOperand(fp, parameter_count_offset));
-  if (function_mode() == JS_FUNCTION_STUB_MODE) {
-    __ addi(r4, r4, Operand(1));
+void ProfileEntryHookStub::MaybeCallEntryHookDelayed(MacroAssembler* masm,
+                                                     Zone* zone) {
+  UNIMPLEMENTED_PPC();
+  if (masm->isolate()->function_entry_hook() != NULL) {
+    PredictableCodeSizeScope predictable(masm,
+#if V8_TARGET_ARCH_PPC64
+                                         14 * Assembler::kInstrSize);
+#else
+                                         11 * Assembler::kInstrSize);
+#endif
+    ProfileEntryHookStub stub(masm->isolate());
+    __ mflr(r0);
+    __ Push(r0, ip);
+    __ CallStub(&stub);
+    __ Pop(r0, ip);
+    __ mtlr(r0);
   }
-  masm->LeaveFrame(StackFrame::STUB_FAILURE_TRAMPOLINE);
-  __ slwi(r4, r4, Operand(kPointerSizeLog2));
-  __ add(sp, sp, r4);
-  __ Ret();
 }
 
 void ProfileEntryHookStub::MaybeCallEntryHook(MacroAssembler* masm) {
@@ -2505,12 +2456,12 @@ static void CreateArrayDispatchOneArgument(MacroAssembler* masm,
   // sp[0] - last argument
   Label normal_sequence;
   if (mode == DONT_OVERRIDE) {
-    STATIC_ASSERT(FAST_SMI_ELEMENTS == 0);
-    STATIC_ASSERT(FAST_HOLEY_SMI_ELEMENTS == 1);
-    STATIC_ASSERT(FAST_ELEMENTS == 2);
-    STATIC_ASSERT(FAST_HOLEY_ELEMENTS == 3);
-    STATIC_ASSERT(FAST_DOUBLE_ELEMENTS == 4);
-    STATIC_ASSERT(FAST_HOLEY_DOUBLE_ELEMENTS == 5);
+    STATIC_ASSERT(PACKED_SMI_ELEMENTS == 0);
+    STATIC_ASSERT(HOLEY_SMI_ELEMENTS == 1);
+    STATIC_ASSERT(PACKED_ELEMENTS == 2);
+    STATIC_ASSERT(HOLEY_ELEMENTS == 3);
+    STATIC_ASSERT(PACKED_DOUBLE_ELEMENTS == 4);
+    STATIC_ASSERT(HOLEY_DOUBLE_ELEMENTS == 5);
 
     // is the low bit set? If so, we are holey and that is good.
     __ andi(r0, r6, Operand(1));
@@ -2549,10 +2500,13 @@ static void CreateArrayDispatchOneArgument(MacroAssembler* masm,
     // in the AllocationSite::transition_info field because elements kind is
     // restricted to a portion of the field...upper bits need to be left alone.
     STATIC_ASSERT(AllocationSite::ElementsKindBits::kShift == 0);
-    __ LoadP(r7, FieldMemOperand(r5, AllocationSite::kTransitionInfoOffset));
+    __ LoadP(r7, FieldMemOperand(
+                     r5, AllocationSite::kTransitionInfoOrBoilerplateOffset));
     __ AddSmiLiteral(r7, r7, Smi::FromInt(kFastElementsKindPackedToHoley), r0);
-    __ StoreP(r7, FieldMemOperand(r5, AllocationSite::kTransitionInfoOffset),
-              r0);
+    __ StoreP(
+        r7,
+        FieldMemOperand(r5, AllocationSite::kTransitionInfoOrBoilerplateOffset),
+        r0);
 
     __ bind(&normal_sequence);
     int last_index =
@@ -2581,7 +2535,7 @@ static void ArrayConstructorStubAheadOfTimeHelper(Isolate* isolate) {
     ElementsKind kind = GetFastElementsKindFromSequenceIndex(i);
     T stub(isolate, kind);
     stub.GetCode();
-    if (AllocationSite::GetMode(kind) != DONT_TRACK_ALLOCATION_SITE) {
+    if (AllocationSite::ShouldTrack(kind)) {
       T stub1(isolate, kind, DISABLE_ALLOCATION_SITES);
       stub1.GetCode();
     }
@@ -2594,7 +2548,7 @@ void CommonArrayConstructorStub::GenerateStubsAheadOfTime(Isolate* isolate) {
       isolate);
   ArrayNArgumentsConstructorStub stub(isolate);
   stub.GetCode();
-  ElementsKind kinds[2] = {FAST_ELEMENTS, FAST_HOLEY_ELEMENTS};
+  ElementsKind kinds[2] = {PACKED_ELEMENTS, HOLEY_ELEMENTS};
   for (int i = 0; i < 2; i++) {
     // For internal arrays we only need a few things
     InternalArrayNoArgumentConstructorStub stubh1(isolate, kinds[i]);
@@ -2661,7 +2615,8 @@ void ArrayConstructorStub::Generate(MacroAssembler* masm) {
   __ CompareRoot(r5, Heap::kUndefinedValueRootIndex);
   __ beq(&no_info);
 
-  __ LoadP(r6, FieldMemOperand(r5, AllocationSite::kTransitionInfoOffset));
+  __ LoadP(r6, FieldMemOperand(
+                   r5, AllocationSite::kTransitionInfoOrBoilerplateOffset));
   __ SmiUntag(r6);
   STATIC_ASSERT(AllocationSite::ElementsKindBits::kShift == 0);
   __ And(r6, r6, Operand(AllocationSite::ElementsKindBits::kMask));
@@ -2735,20 +2690,20 @@ void InternalArrayConstructorStub::Generate(MacroAssembler* masm) {
 
   if (FLAG_debug_code) {
     Label done;
-    __ cmpi(r6, Operand(FAST_ELEMENTS));
+    __ cmpi(r6, Operand(PACKED_ELEMENTS));
     __ beq(&done);
-    __ cmpi(r6, Operand(FAST_HOLEY_ELEMENTS));
+    __ cmpi(r6, Operand(HOLEY_ELEMENTS));
     __ Assert(eq, kInvalidElementsKindForInternalArrayOrInternalPackedArray);
     __ bind(&done);
   }
 
   Label fast_elements_case;
-  __ cmpi(r6, Operand(FAST_ELEMENTS));
+  __ cmpi(r6, Operand(PACKED_ELEMENTS));
   __ beq(&fast_elements_case);
-  GenerateCase(masm, FAST_HOLEY_ELEMENTS);
+  GenerateCase(masm, HOLEY_ELEMENTS);
 
   __ bind(&fast_elements_case);
-  GenerateCase(masm, FAST_ELEMENTS);
+  GenerateCase(masm, PACKED_ELEMENTS);
 }
 
 static int AddressOffset(ExternalReference ref0, ExternalReference ref1) {

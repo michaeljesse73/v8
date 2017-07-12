@@ -37,12 +37,15 @@ class V8_EXPORT_PRIVATE JSIntrinsicLowering final
                       DeoptimizationMode mode);
   ~JSIntrinsicLowering() final {}
 
+  const char* reducer_name() const override { return "JSIntrinsicLowering"; }
+
   Reduction Reduce(Node* node) final;
 
  private:
   Reduction ReduceCreateIterResultObject(Node* node);
   Reduction ReduceDebugIsActive(Node* node);
   Reduction ReduceDeoptimizeNow(Node* node);
+  Reduction ReduceCreateJSGeneratorObject(Node* node);
   Reduction ReduceGeneratorClose(Node* node);
   Reduction ReduceGeneratorGetContext(Node* node);
   Reduction ReduceGeneratorGetInputOrDebugPos(Node* node);

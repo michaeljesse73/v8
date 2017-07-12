@@ -13,6 +13,11 @@
 namespace v8 {
 namespace internal {
 
+// Decodes kind from Smi-handler.
+LoadHandler::Kind LoadHandler::GetHandlerKind(Smi* smi_handler) {
+  return KindBits::decode(smi_handler->value());
+}
+
 Handle<Smi> LoadHandler::LoadNormal(Isolate* isolate) {
   int config = KindBits::encode(kNormal);
   return handle(Smi::FromInt(config), isolate);
@@ -117,7 +122,6 @@ Handle<Smi> StoreHandler::StoreField(Isolate* isolate, Kind kind,
       break;
     default:
       UNREACHABLE();
-      return Handle<Smi>::null();
   }
 
   DCHECK(kind == kStoreField || kind == kTransitionToField ||

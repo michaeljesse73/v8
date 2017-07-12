@@ -55,12 +55,10 @@ double CygwinTimezoneCache::LocalTimeOffset() {
                              (loc->tm_isdst > 0 ? 3600 * msPerSecond : 0));
 }
 
-
-void* OS::Allocate(const size_t requested,
-                   size_t* allocated,
-                   bool is_executable) {
+void* OS::Allocate(const size_t requested, size_t* allocated,
+                   OS::MemoryPermission access) {
   const size_t msize = RoundUp(requested, sysconf(_SC_PAGESIZE));
-  int prot = PROT_READ | PROT_WRITE | (is_executable ? PROT_EXEC : 0);
+  int prot = GetProtectionFromMemoryPermission(access);
   void* mbase = mmap(NULL, msize, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (mbase == MAP_FAILED) return NULL;
   *allocated = msize;
@@ -145,9 +143,7 @@ static void* RandomizedVirtualAlloc(size_t size, int action, int protection) {
 
   if (protection == PAGE_EXECUTE_READWRITE || protection == PAGE_NOACCESS) {
     // For exectutable pages try and randomize the allocation address
-    for (size_t attempts = 0; base == NULL && attempts < 3; ++attempts) {
-      base = VirtualAlloc(OS::GetRandomMmapAddr(), size, action, protection);
-    }
+    base = VirtualAlloc(OS::GetRandomMmapAddr(), size, action, protection);
   }
 
   // After three attempts give up and let the OS find an address to use.
@@ -197,12 +193,6 @@ VirtualMemory::~VirtualMemory() {
     USE(result);
   }
 }
-
-
-bool VirtualMemory::IsReserved() {
-  return address_ != NULL;
-}
-
 
 void VirtualMemory::Reset() {
   address_ = NULL;

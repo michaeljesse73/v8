@@ -93,7 +93,29 @@ typedef MachineRepresentation CheckedStoreRepresentation;
 
 CheckedStoreRepresentation CheckedStoreRepresentationOf(Operator const*);
 
-int StackSlotSizeOf(Operator const* op);
+class StackSlotRepresentation final {
+ public:
+  StackSlotRepresentation(int size, int alignment)
+      : size_(size), alignment_(alignment) {}
+
+  int size() const { return size_; }
+  int alignment() const { return alignment_; }
+
+ private:
+  int size_;
+  int alignment_;
+};
+
+V8_EXPORT_PRIVATE bool operator==(StackSlotRepresentation,
+                                  StackSlotRepresentation);
+bool operator!=(StackSlotRepresentation, StackSlotRepresentation);
+
+size_t hash_value(StackSlotRepresentation);
+
+V8_EXPORT_PRIVATE std::ostream& operator<<(std::ostream&,
+                                           StackSlotRepresentation);
+
+StackSlotRepresentation const& StackSlotRepresentationOf(Operator const* op);
 
 MachineRepresentation AtomicStoreRepresentationOf(Operator const* op);
 
@@ -472,8 +494,8 @@ class V8_EXPORT_PRIVATE MachineOperatorBuilder final
   const Operator* I32x4MaxS();
   const Operator* I32x4Eq();
   const Operator* I32x4Ne();
-  const Operator* I32x4LtS();
-  const Operator* I32x4LeS();
+  const Operator* I32x4GtS();
+  const Operator* I32x4GeS();
 
   const Operator* I32x4UConvertF32x4();
   const Operator* I32x4UConvertI16x8Low();
@@ -481,8 +503,8 @@ class V8_EXPORT_PRIVATE MachineOperatorBuilder final
   const Operator* I32x4ShrU(int32_t);
   const Operator* I32x4MinU();
   const Operator* I32x4MaxU();
-  const Operator* I32x4LtU();
-  const Operator* I32x4LeU();
+  const Operator* I32x4GtU();
+  const Operator* I32x4GeU();
 
   const Operator* I16x8Splat();
   const Operator* I16x8ExtractLane(int32_t);
@@ -503,8 +525,8 @@ class V8_EXPORT_PRIVATE MachineOperatorBuilder final
   const Operator* I16x8MaxS();
   const Operator* I16x8Eq();
   const Operator* I16x8Ne();
-  const Operator* I16x8LtS();
-  const Operator* I16x8LeS();
+  const Operator* I16x8GtS();
+  const Operator* I16x8GeS();
 
   const Operator* I16x8UConvertI8x16Low();
   const Operator* I16x8UConvertI8x16High();
@@ -514,8 +536,8 @@ class V8_EXPORT_PRIVATE MachineOperatorBuilder final
   const Operator* I16x8SubSaturateU();
   const Operator* I16x8MinU();
   const Operator* I16x8MaxU();
-  const Operator* I16x8LtU();
-  const Operator* I16x8LeU();
+  const Operator* I16x8GtU();
+  const Operator* I16x8GeU();
 
   const Operator* I8x16Splat();
   const Operator* I8x16ExtractLane(int32_t);
@@ -533,8 +555,8 @@ class V8_EXPORT_PRIVATE MachineOperatorBuilder final
   const Operator* I8x16MaxS();
   const Operator* I8x16Eq();
   const Operator* I8x16Ne();
-  const Operator* I8x16LtS();
-  const Operator* I8x16LeS();
+  const Operator* I8x16GtS();
+  const Operator* I8x16GeS();
 
   const Operator* I8x16ShrU(int32_t);
   const Operator* I8x16UConvertI16x8();
@@ -542,8 +564,8 @@ class V8_EXPORT_PRIVATE MachineOperatorBuilder final
   const Operator* I8x16SubSaturateU();
   const Operator* I8x16MinU();
   const Operator* I8x16MaxU();
-  const Operator* I8x16LtU();
-  const Operator* I8x16LeU();
+  const Operator* I8x16GtU();
+  const Operator* I8x16GeU();
 
   const Operator* S128Load();
   const Operator* S128Store();
@@ -553,58 +575,14 @@ class V8_EXPORT_PRIVATE MachineOperatorBuilder final
   const Operator* S128Or();
   const Operator* S128Xor();
   const Operator* S128Not();
+  const Operator* S128Select();
 
-  const Operator* S32x4ZipLeft();
-  const Operator* S32x4ZipRight();
-  const Operator* S32x4UnzipLeft();
-  const Operator* S32x4UnzipRight();
-  const Operator* S32x4TransposeLeft();
-  const Operator* S32x4TransposeRight();
-  const Operator* S32x4Select();
-  const Operator* S16x8ZipLeft();
-  const Operator* S16x8ZipRight();
-  const Operator* S16x8UnzipLeft();
-  const Operator* S16x8UnzipRight();
-  const Operator* S16x8TransposeLeft();
-  const Operator* S16x8TransposeRight();
-  const Operator* S16x8Select();
-  const Operator* S8x16ZipLeft();
-  const Operator* S8x16ZipRight();
-  const Operator* S8x16UnzipLeft();
-  const Operator* S8x16UnzipRight();
-  const Operator* S8x16TransposeLeft();
-  const Operator* S8x16TransposeRight();
-  const Operator* S8x16Select();
-  const Operator* S8x16Concat(int32_t);
+  const Operator* S8x16Shuffle(uint8_t shuffle[16]);
 
-  const Operator* S32x2Reverse();
-  const Operator* S16x4Reverse();
-  const Operator* S16x2Reverse();
-  const Operator* S8x8Reverse();
-  const Operator* S8x4Reverse();
-  const Operator* S8x2Reverse();
-
-  const Operator* S1x4Zero();
-  const Operator* S1x4And();
-  const Operator* S1x4Or();
-  const Operator* S1x4Xor();
-  const Operator* S1x4Not();
   const Operator* S1x4AnyTrue();
   const Operator* S1x4AllTrue();
-
-  const Operator* S1x8Zero();
-  const Operator* S1x8And();
-  const Operator* S1x8Or();
-  const Operator* S1x8Xor();
-  const Operator* S1x8Not();
   const Operator* S1x8AnyTrue();
   const Operator* S1x8AllTrue();
-
-  const Operator* S1x16Zero();
-  const Operator* S1x16And();
-  const Operator* S1x16Or();
-  const Operator* S1x16Xor();
-  const Operator* S1x16Not();
   const Operator* S1x16AnyTrue();
   const Operator* S1x16AllTrue();
 
@@ -622,8 +600,8 @@ class V8_EXPORT_PRIVATE MachineOperatorBuilder final
   // unaligned store [base + index], value
   const Operator* UnalignedStore(UnalignedStoreRepresentation rep);
 
-  const Operator* StackSlot(int size);
-  const Operator* StackSlot(MachineRepresentation rep);
+  const Operator* StackSlot(int size, int alignment = 0);
+  const Operator* StackSlot(MachineRepresentation rep, int alignment = 0);
 
   // Access to the machine stack.
   const Operator* LoadStackPointer();

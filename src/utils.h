@@ -188,14 +188,14 @@ inline bool IsAddressAligned(Address addr,
 
 // Returns the maximum of the two parameters.
 template <typename T>
-T Max(T a, T b) {
+constexpr T Max(T a, T b) {
   return a < b ? b : a;
 }
 
 
 // Returns the minimum of the two parameters.
 template <typename T>
-T Min(T a, T b) {
+constexpr T Min(T a, T b) {
   return a < b ? a : b;
 }
 
@@ -267,25 +267,6 @@ inline int32_t WhichPowerOf2Abs(int32_t x) {
 }
 
 
-// Obtains the unsigned type corresponding to T
-// available in C++11 as std::make_unsigned
-template<typename T>
-struct make_unsigned {
-  typedef T type;
-};
-
-
-// Template specializations necessary to have make_unsigned work
-template<> struct make_unsigned<int32_t> {
-  typedef uint32_t type;
-};
-
-
-template<> struct make_unsigned<int64_t> {
-  typedef uint64_t type;
-};
-
-
 // ----------------------------------------------------------------------------
 // BitField is a help template for encoding and decode bitfield with
 // unsigned content.
@@ -293,6 +274,8 @@ template<> struct make_unsigned<int64_t> {
 template<class T, int shift, int size, class U>
 class BitFieldBase {
  public:
+  typedef T FieldType;
+
   // A type U mask of bit field.  To use all bits of a type U of x bits
   // in a bitfield without compiler warnings we have to compute 2^x
   // without using a shift count of x in the computation.
@@ -344,6 +327,41 @@ class BitField : public BitFieldBase<T, shift, size, uint32_t> { };
 template<class T, int shift, int size>
 class BitField64 : public BitFieldBase<T, shift, size, uint64_t> { };
 
+// Helper macros for defining a contiguous sequence of bit fields. Example:
+// (backslashes at the ends of respective lines of this multi-line macro
+// definition are omitted here to please the compiler)
+//
+// #define MAP_BIT_FIELD1(V, _)
+//   V(IsAbcBit, bool, 1, _)
+//   V(IsBcdBit, bool, 1, _)
+//   V(CdeBits, int, 5, _)
+//   V(DefBits, MutableMode, 1, _)
+//
+// DEFINE_BIT_FIELDS(MAP_BIT_FIELD1)
+// or
+// DEFINE_BIT_FIELDS_64(MAP_BIT_FIELD1)
+//
+#define DEFINE_BIT_FIELD_RANGE_TYPE(Name, Type, Size, _) \
+  k##Name##Start, k##Name##End = k##Name##Start + Size - 1,
+
+#define DEFINE_BIT_RANGES(LIST_MACRO)                    \
+  struct LIST_MACRO##_Ranges {                           \
+    enum { LIST_MACRO(DEFINE_BIT_FIELD_RANGE_TYPE, _) }; \
+  };
+
+#define DEFINE_BIT_FIELD_TYPE(Name, Type, Size, RangesName) \
+  typedef BitField<Type, RangesName::k##Name##Start, Size> Name;
+
+#define DEFINE_BIT_FIELD_64_TYPE(Name, Type, Size, RangesName) \
+  typedef BitField64<Type, RangesName::k##Name##Start, Size> Name;
+
+#define DEFINE_BIT_FIELDS(LIST_MACRO) \
+  DEFINE_BIT_RANGES(LIST_MACRO)       \
+  LIST_MACRO(DEFINE_BIT_FIELD_TYPE, LIST_MACRO##_Ranges)
+
+#define DEFINE_BIT_FIELDS_64(LIST_MACRO) \
+  DEFINE_BIT_RANGES(LIST_MACRO)          \
+  LIST_MACRO(DEFINE_BIT_FIELD_64_TYPE, LIST_MACRO##_Ranges)
 
 // ----------------------------------------------------------------------------
 // BitSetComputer is a help template for encoding and decoding information for
@@ -384,6 +402,26 @@ class BitSetComputer {
   static int shift(int item) { return (item % kItemsPerWord) * kBitsPerItem; }
 };
 
+// Helper macros for defining a contiguous sequence of field offset constants.
+// Example: (backslashes at the ends of respective lines of this multi-line
+// macro definition are omitted here to please the compiler)
+//
+// #define MAP_FIELDS(V)
+//   V(kField1Offset, kPointerSize)
+//   V(kField2Offset, kIntSize)
+//   V(kField3Offset, kIntSize)
+//   V(kField4Offset, kPointerSize)
+//   V(kSize, 0)
+//
+// DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize, MAP_FIELDS)
+//
+#define DEFINE_ONE_FIELD_OFFSET(Name, Size) Name, Name##End = Name + Size - 1,
+
+#define DEFINE_FIELD_OFFSET_CONSTANTS(StartOffset, LIST_MACRO) \
+  enum {                                                       \
+    LIST_MACRO##_StartOffset = StartOffset - 1,                \
+    LIST_MACRO(DEFINE_ONE_FIELD_OFFSET)                        \
+  };
 
 // ----------------------------------------------------------------------------
 // Hash function.
@@ -404,6 +442,9 @@ inline uint32_t ComputeIntegerHash(uint32_t key, uint32_t seed) {
   return hash & 0x3fffffff;
 }
 
+inline uint32_t ComputeIntegerHash(uint32_t key) {
+  return ComputeIntegerHash(key, kZeroHashSeed);
+}
 
 inline uint32_t ComputeLongHash(uint64_t key) {
   uint64_t hash = key;
@@ -419,8 +460,7 @@ inline uint32_t ComputeLongHash(uint64_t key) {
 
 inline uint32_t ComputePointerHash(void* ptr) {
   return ComputeIntegerHash(
-      static_cast<uint32_t>(reinterpret_cast<intptr_t>(ptr)),
-      v8::internal::kZeroHashSeed);
+      static_cast<uint32_t>(reinterpret_cast<intptr_t>(ptr)));
 }
 
 
@@ -866,27 +906,6 @@ INT_1_TO_63_LIST(DECLARE_TRUNCATE_TO_INT_N)
 #undef DECLARE_IS_UINT_N
 #undef DECLARE_TRUNCATE_TO_INT_N
 
-class TypeFeedbackId {
- public:
-  explicit TypeFeedbackId(int id) : id_(id) { }
-  int ToInt() const { return id_; }
-
-  static TypeFeedbackId None() { return TypeFeedbackId(kNoneId); }
-  bool IsNone() const { return id_ == kNoneId; }
-
- private:
-  static const int kNoneId = -1;
-
-  int id_;
-};
-
-inline bool operator<(TypeFeedbackId lhs, TypeFeedbackId rhs) {
-  return lhs.ToInt() < rhs.ToInt();
-}
-inline bool operator>(TypeFeedbackId lhs, TypeFeedbackId rhs) {
-  return lhs.ToInt() > rhs.ToInt();
-}
-
 class FeedbackSlot {
  public:
   FeedbackSlot() : id_(kInvalidSlot) {}
@@ -941,6 +960,8 @@ class BailoutId {
   V8_EXPORT_PRIVATE friend std::ostream& operator<<(std::ostream&, BailoutId);
 
  private:
+  friend class Builtins;
+
   static const int kNoneId = -1;
 
   // Using 0 could disguise errors.
@@ -958,6 +979,11 @@ class BailoutId {
 
   // Every compiled stub starts with this id.
   static const int kStubEntryId = 6;
+
+  // Builtin continuations bailout ids start here. If you need to add a
+  // non-builtin BailoutId, add it before this id so that this Id has the
+  // highest number.
+  static const int kFirstBuiltinContinuationId = 7;
 
   int id_;
 };
@@ -979,7 +1005,7 @@ void PRINTF_FORMAT(2, 3) PrintIsolate(void* isolate, const char* format, ...);
 // Safe formatting print. Ensures that str is always null-terminated.
 // Returns the number of chars written, or -1 if output was truncated.
 int PRINTF_FORMAT(2, 3) SNPrintF(Vector<char> str, const char* format, ...);
-int PRINTF_FORMAT(2, 0)
+V8_EXPORT_PRIVATE int PRINTF_FORMAT(2, 0)
     VSNPrintF(Vector<char> str, const char* format, va_list args);
 
 void StrNCpy(Vector<char> dest, const char* src, size_t n);
@@ -1042,11 +1068,8 @@ int WriteAsCFile(const char* filename, const char* varname,
 template <typename T>
 inline void CopyWords(T* dst, const T* src, size_t num_words) {
   STATIC_ASSERT(sizeof(T) == kPointerSize);
-  // TODO(mvstanton): disabled because mac builds are bogus failing on this
-  // assert. They are doing a signed comparison. Investigate in
-  // the morning.
-  // DCHECK(Min(dst, const_cast<T*>(src)) + num_words <=
-  //       Max(dst, const_cast<T*>(src)));
+  DCHECK(Min(dst, const_cast<T*>(src)) + num_words <=
+         Max(dst, const_cast<T*>(src)));
   DCHECK(num_words > 0);
 
   // Use block copying MemCopy if the segment we're copying is
@@ -1489,32 +1512,7 @@ class StringBuilder : public SimpleStringBuilder {
 bool DoubleToBoolean(double d);
 
 template <typename Stream>
-bool StringToArrayIndex(Stream* stream, uint32_t* index) {
-  uint16_t ch = stream->GetNext();
-
-  // If the string begins with a '0' character, it must only consist
-  // of it to be a legal array index.
-  if (ch == '0') {
-    *index = 0;
-    return !stream->HasMore();
-  }
-
-  // Convert string to uint32 array index; character by character.
-  int d = ch - '0';
-  if (d < 0 || d > 9) return false;
-  uint32_t result = d;
-  while (stream->HasMore()) {
-    d = stream->GetNext() - '0';
-    if (d < 0 || d > 9) return false;
-    // Check that the new result is below the 32 bit limit.
-    if (result > 429496729U - ((d + 3) >> 3)) return false;
-    result = (result * 10) + d;
-  }
-
-  *index = result;
-  return true;
-}
-
+bool StringToArrayIndex(Stream* stream, uint32_t* index);
 
 // Returns current value of top of the stack. Works correctly with ASAN.
 DISABLE_ASAN

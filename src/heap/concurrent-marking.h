@@ -5,8 +5,6 @@
 #ifndef V8_HEAP_CONCURRENT_MARKING_
 #define V8_HEAP_CONCURRENT_MARKING_
 
-#include <vector>
-
 #include "src/allocation.h"
 #include "src/cancelable-task.h"
 #include "src/utils.h"
@@ -17,25 +15,45 @@ namespace internal {
 
 class Heap;
 class Isolate;
+template <typename EntryType, int SEGMENT_SIZE>
+class Worklist;
 
 class ConcurrentMarking {
  public:
-  explicit ConcurrentMarking(Heap* heap);
-  ~ConcurrentMarking();
+  // When the scope is entered, the concurrent marking tasks
+  // are paused and are not looking at the heap objects.
+  class PauseScope {
+   public:
+    explicit PauseScope(ConcurrentMarking* concurrent_marking);
+    ~PauseScope();
 
-  void AddRoot(HeapObject* object);
+   private:
+    ConcurrentMarking* concurrent_marking_;
+  };
 
-  void StartTask();
-  void WaitForTaskToComplete();
-  bool IsTaskPending() { return is_task_pending_; }
-  void EnsureTaskCompleted();
+  static const int kTasks = 4;
+  using MarkingWorklist = Worklist<HeapObject*, 64 /* segment size */>;
+
+  ConcurrentMarking(Heap* heap, MarkingWorklist* shared_,
+                    MarkingWorklist* bailout_);
+
+  void Start();
+  bool IsRunning() { return pending_task_count_ > 0; }
+  void EnsureCompleted();
 
  private:
+  struct TaskLock {
+    base::Mutex lock;
+    char cache_line_padding[64];
+  };
   class Task;
+  void Run(int task_id, base::Mutex* lock);
   Heap* heap_;
+  MarkingWorklist* shared_;
+  MarkingWorklist* bailout_;
+  TaskLock task_lock_[kTasks];
   base::Semaphore pending_task_semaphore_;
-  bool is_task_pending_;
-  std::vector<HeapObject*> root_set_;
+  int pending_task_count_;
 };
 
 }  // namespace internal

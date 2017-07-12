@@ -45,14 +45,14 @@ var elements_kind = {
 }
 
 function getKind(obj) {
-  if (%HasFastSmiElements(obj)) return elements_kind.fast_smi_only;
-  if (%HasFastObjectElements(obj)) return elements_kind.fast;
-  if (%HasFastDoubleElements(obj)) return elements_kind.fast_double;
+  if (%HasSmiElements(obj)) return elements_kind.fast_smi_only;
+  if (%HasObjectElements(obj)) return elements_kind.fast;
+  if (%HasDoubleElements(obj)) return elements_kind.fast_double;
   if (%HasDictionaryElements(obj)) return elements_kind.dictionary;
 }
 
 function isHoley(obj) {
-  if (%HasFastHoleyElements(obj)) return true;
+  if (%HasHoleyElements(obj)) return true;
   return false;
 }
 
@@ -69,10 +69,10 @@ get_literal(3);
 // It's important to store a from before we crankshaft get_literal, because
 // mementos won't be created from crankshafted code at all.
 a = get_literal(3);
-  %OptimizeFunctionOnNextCall(get_literal);
+%OptimizeFunctionOnNextCall(get_literal);
 get_literal(3);
 assertOptimized(get_literal);
-assertTrue(%HasFastSmiElements(a));
+assertTrue(%HasSmiElements(a));
 // a has a memento so the transition caused by the store will affect the
 // boilerplate.
 a[0] = 3.5;
@@ -80,15 +80,15 @@ a[0] = 3.5;
 // We should have transitioned the boilerplate array to double, and
 // crankshafted code should de-opt on the unexpected elements kind
 b = get_literal(3);
-assertTrue(%HasFastDoubleElements(b));
+assertTrue(%HasDoubleElements(b));
 assertEquals([1, 2, 3], b);
 assertUnoptimized(get_literal);
 
 // Optimize again
 get_literal(3);
-  %OptimizeFunctionOnNextCall(get_literal);
+%OptimizeFunctionOnNextCall(get_literal);
 b = get_literal(3);
-assertTrue(%HasFastDoubleElements(b));
+assertTrue(%HasDoubleElements(b));
 assertOptimized(get_literal);
 
 
@@ -99,9 +99,20 @@ assertOptimized(get_literal);
     return [a, b, c];
   }
 
-  a = bar(1, 2, 3);
+  var a = bar(1, 2, 3);
+  assertKind(elements_kind.fast_smi_only, a);
   a[0] = 3.5;
   a[1] = 'hi';
-  b = bar(1, 2, 3);
+  assertKind(elements_kind.fast, a);
+
+  // We only start tracking transition information with the second
+  // instantiation.
+  var b = bar(1, 2, 3);
+  assertKind(elements_kind.fast_smi_only, b);
+  b[0] = 3.5;
+  b[1] = 'hi';
   assertKind(elements_kind.fast, b);
+
+  var c = bar(1, 2, 3);
+  assertKind(elements_kind.fast, c);
 })();

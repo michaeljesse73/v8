@@ -8,23 +8,23 @@ vars = {
 
 deps = {
   "v8/build":
-    Var("chromium_url") + "/chromium/src/build.git" + "@" + "853f22fc61f50c5749279c3c51cca22e4bb91e8b",
+    Var("chromium_url") + "/chromium/src/build.git" + "@" + "7e59b44eb6cce24a88adf5dd9485612fd4eb0a97",
   "v8/tools/gyp":
     Var("chromium_url") + "/external/gyp.git" + "@" + "eb296f67da078ec01f5e3a9ea9cdc6d26d680161",
   "v8/third_party/icu":
-    Var("chromium_url") + "/chromium/deps/icu.git" + "@" + "b34251f8b762f8e2112a89c587855ca4297fed96",
+    Var("chromium_url") + "/chromium/deps/icu.git" + "@" + "dfa798fe694702b43a3debc3290761f22b1acaf8",
   "v8/third_party/instrumented_libraries":
-    Var("chromium_url") + "/chromium/src/third_party/instrumented_libraries.git" + "@" + "0ad2bcba0ea60236307d9302d90db7a6e94c5d19",
+    Var("chromium_url") + "/chromium/src/third_party/instrumented_libraries.git" + "@" + "644afd349826cb68204226a16c38bde13abe9c3c",
   "v8/buildtools":
-    Var("chromium_url") + "/chromium/buildtools.git" + "@" + "98f00fa10dbad2cdbb2e297a66c3d6d5bc3994f3",
+    Var("chromium_url") + "/chromium/buildtools.git" + "@" + "1dcd1bdbe93467531a50b60dbd18860803ca7be1",
   "v8/base/trace_event/common":
-    Var("chromium_url") + "/chromium/src/base/trace_event/common.git" + "@" + "06294c8a4a6f744ef284cd63cfe54dbf61eea290",
+    Var("chromium_url") + "/chromium/src/base/trace_event/common.git" + "@" + "65d1d42a5df6c0a563a6fdfa58a135679185e5d9",
   "v8/third_party/jinja2":
     Var("chromium_url") + "/chromium/src/third_party/jinja2.git" + "@" + "d34383206fa42d52faa10bb9931d6d538f3a57e0",
   "v8/third_party/markupsafe":
     Var("chromium_url") + "/chromium/src/third_party/markupsafe.git" + "@" + "8f45f5cfa0009d2a70589bcda0349b8cb2b72783",
   "v8/tools/swarming_client":
-    Var('chromium_url') + '/external/swarming.client.git' + '@' + "11e31afa5d330756ff87aa12064bb5d032896cb5",
+    Var('chromium_url') + '/external/swarming.client.git' + '@' + "a56c2b39ca23bdf41458421a7f825ddbf3f43f28",
   "v8/testing/gtest":
     Var("chromium_url") + "/external/github.com/google/googletest.git" + "@" + "6f8a66431cb592dad629028a50b3dd418a408c87",
   "v8/testing/gmock":
@@ -34,21 +34,21 @@ deps = {
   "v8/test/mozilla/data":
     Var("chromium_url") + "/v8/deps/third_party/mozilla-tests.git" + "@" + "f6c578a10ea707b1a8ab0b88943fe5115ce2b9be",
   "v8/test/test262/data":
-    Var("chromium_url") + "/external/github.com/tc39/test262.git" + "@" + "230f9fc5688ce76bfaa99aba5f680a159eaac9e2",
+    Var("chromium_url") + "/external/github.com/tc39/test262.git" + "@" + "d5e1150325e93e76774c0f4b779ef17bebdc07d6",
   "v8/test/test262/harness":
     Var("chromium_url") + "/external/github.com/test262-utils/test262-harness-py.git" + "@" + "0f2acdd882c84cff43b9d60df7574a1901e2cdcd",
   "v8/tools/clang":
-    Var("chromium_url") + "/chromium/src/tools/clang.git" + "@" + "dc087f5ab32a873119d34b4916c29b84ae9fd5b6",
+    Var("chromium_url") + "/chromium/src/tools/clang.git" + "@" + "4dc63de8439474c75ba986a635bf7ee6eb944a9e",
   "v8/test/wasm-js":
-    Var("chromium_url") + "/external/github.com/WebAssembly/spec.git" + "@" + "07fd6430f879d36928d179a62d9bdeed82286065",
+    Var("chromium_url") + "/external/github.com/WebAssembly/spec.git" + "@" + "aadd3a340c78e53078a7bb6c17cc30f105c2960c",
 }
 
 deps_os = {
   "android": {
     "v8/third_party/android_tools":
-      Var("chromium_url") + "/android_tools.git" + "@" + "cb6bc21107001e2f2eeee2707b482b2b755baf51",
+      Var("chromium_url") + "/android_tools.git" + "@" + "e9d4018e149d50172ed462a7c21137aa915940ec",
     "v8/third_party/catapult":
-      Var('chromium_url') + "/external/github.com/catapult-project/catapult.git" + "@" + "fa1d11d0530dd5eb7992dd7e599e6b9908afe8c7",
+      Var('chromium_url') + "/external/github.com/catapult-project/catapult.git" + "@" + "08d8c9f0860202115b653dc31a06d366a5978623",
   },
 }
 
@@ -213,50 +213,6 @@ hooks = [
     ],
   },
   {
-    "name": "wasm_fuzzer_new",
-    "pattern": ".",
-    "action": [ "download_from_google_storage",
-                "--no_resume",
-                "--no_auth",
-                "-u",
-                "--bucket", "v8-wasm-fuzzer",
-                "-s", "v8/test/fuzzer/wasm_corpus.tar.gz.sha1",
-    ],
-  },
-  {
-    "name": "wasm_fuzzer",
-    "pattern": ".",
-    "action": [ "download_from_google_storage",
-                "--no_resume",
-                "--no_auth",
-                "-u",
-                "--bucket", "v8-wasm-fuzzer",
-                "-s", "v8/test/fuzzer/wasm.tar.gz.sha1",
-    ],
-  },
-  {
-    "name": "wasm_asmjs_fuzzer_new",
-    "pattern": ".",
-    "action": [ "download_from_google_storage",
-                "--no_resume",
-                "--no_auth",
-                "-u",
-                "--bucket", "v8-wasm-asmjs-fuzzer",
-                "-s", "v8/test/fuzzer/wasm_asmjs_corpus.tar.gz.sha1",
-    ],
-  },
-  {
-    "name": "wasm_asmjs_fuzzer",
-    "pattern": ".",
-    "action": [ "download_from_google_storage",
-                "--no_resume",
-                "--no_auth",
-                "-u",
-                "--bucket", "v8-wasm-asmjs-fuzzer",
-                "-s", "v8/test/fuzzer/wasm_asmjs.tar.gz.sha1",
-    ],
-  },
-  {
     "name": "closure_compiler",
     "pattern": ".",
     "action": [ "download_from_google_storage",
@@ -305,13 +261,6 @@ hooks = [
         'python',
         'v8/third_party/binutils/download.py',
     ],
-  },
-  {
-    # Pull gold plugin if needed or requested via GYP_DEFINES.
-    # Note: This must run before the clang update.
-    'name': 'gold_plugin',
-    'pattern': '.',
-    'action': ['python', 'v8/gypfiles/download_gold_plugin.py'],
   },
   {
     # Pull clang if needed or requested via GYP_DEFINES.

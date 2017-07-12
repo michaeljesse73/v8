@@ -35,7 +35,7 @@ TF_BUILTIN(CopyFastSmiOrObjectElements, CodeStubAssembler) {
   Node* length = TaggedToParameter(LoadFixedArrayBaseLength(source), mode);
 
   // Check if we can allocate in new space.
-  ElementsKind kind = FAST_ELEMENTS;
+  ElementsKind kind = PACKED_ELEMENTS;
   int max_elements = FixedArrayBase::GetMaxLengthForNewSpaceAllocation(kind);
   Label if_newspace(this), if_oldspace(this);
   Branch(UintPtrOrSmiLessThan(length, IntPtrOrSmiConstant(max_elements, mode),
@@ -68,7 +68,7 @@ TF_BUILTIN(GrowFastDoubleElements, CodeStubAssembler) {
 
   Label runtime(this, Label::kDeferred);
   Node* elements = LoadElements(object);
-  elements = TryGrowElementsCapacity(object, elements, FAST_DOUBLE_ELEMENTS,
+  elements = TryGrowElementsCapacity(object, elements, PACKED_DOUBLE_ELEMENTS,
                                      key, &runtime);
   Return(elements);
 
@@ -84,7 +84,7 @@ TF_BUILTIN(GrowFastSmiOrObjectElements, CodeStubAssembler) {
   Label runtime(this, Label::kDeferred);
   Node* elements = LoadElements(object);
   elements =
-      TryGrowElementsCapacity(object, elements, FAST_ELEMENTS, key, &runtime);
+      TryGrowElementsCapacity(object, elements, PACKED_ELEMENTS, key, &runtime);
   Return(elements);
 
   BIND(&runtime);
@@ -96,7 +96,7 @@ TF_BUILTIN(NewUnmappedArgumentsElements, CodeStubAssembler) {
   Node* length = SmiToWord(Parameter(Descriptor::kLength));
 
   // Check if we can allocate in new space.
-  ElementsKind kind = FAST_ELEMENTS;
+  ElementsKind kind = PACKED_ELEMENTS;
   int max_elements = FixedArray::GetMaxLengthForNewSpaceAllocation(kind);
   Label if_newspace(this), if_oldspace(this, Label::kDeferred);
   Branch(IntPtrLessThan(length, IntPtrConstant(max_elements)), &if_newspace,
@@ -136,8 +136,7 @@ TF_BUILTIN(NewUnmappedArgumentsElements, CodeStubAssembler) {
 
         // Load the parameter at the given {index}.
         Node* value = Load(MachineType::AnyTagged(), frame,
-                           WordShl(IntPtrSub(offset, index),
-                                   IntPtrConstant(kPointerSizeLog2)));
+                           TimesPointerSize(IntPtrSub(offset, index)));
 
         // Store the {value} into the {result}.
         StoreFixedArrayElement(result, index, value, SKIP_WRITE_BARRIER);
@@ -169,84 +168,6 @@ class DeletePropertyBaseAssembler : public CodeStubAssembler {
   explicit DeletePropertyBaseAssembler(compiler::CodeAssemblerState* state)
       : CodeStubAssembler(state) {}
 
-  void DeleteFastProperty(Node* receiver, Node* receiver_map, Node* properties,
-                          Node* name, Label* dont_delete, Label* not_found,
-                          Label* slow) {
-    // This builtin implements a special case for fast property deletion:
-    // when the last property in an object is deleted, then instead of
-    // normalizing the properties, we can undo the last map transition,
-    // with a few prerequisites:
-    // (1) The current map must not be marked stable. Otherwise there could
-    // be optimized code that depends on the assumption that no object that
-    // reached this map transitions away from it (without triggering the
-    // "deoptimize dependent code" mechanism).
-    Node* bitfield3 = LoadMapBitField3(receiver_map);
-    GotoIfNot(IsSetWord32<Map::IsUnstable>(bitfield3), slow);
-    // (2) The property to be deleted must be the last property.
-    Node* descriptors = LoadMapDescriptors(receiver_map);
-    Node* nof = DecodeWord32<Map::NumberOfOwnDescriptorsBits>(bitfield3);
-    GotoIf(Word32Equal(nof, Int32Constant(0)), not_found);
-    Node* descriptor_number = Int32Sub(nof, Int32Constant(1));
-    Node* key_index = DescriptorArrayToKeyIndex(descriptor_number);
-    Node* actual_key = LoadFixedArrayElement(descriptors, key_index);
-    // TODO(jkummerow): We could implement full descriptor search in order
-    // to avoid the runtime call for deleting nonexistent properties, but
-    // that's probably a rare case.
-    GotoIf(WordNotEqual(actual_key, name), slow);
-    // (3) The property to be deleted must be deletable.
-    Node* details =
-        LoadDetailsByKeyIndex<DescriptorArray>(descriptors, key_index);
-    GotoIf(IsSetWord32(details, PropertyDetails::kAttributesDontDeleteMask),
-           dont_delete);
-    // (4) The map must have a back pointer.
-    Node* backpointer =
-        LoadObjectField(receiver_map, Map::kConstructorOrBackPointerOffset);
-    GotoIfNot(IsMap(backpointer), slow);
-    // (5) The last transition must have been caused by adding a property
-    // (and not any kind of special transition).
-    Node* previous_nof = DecodeWord32<Map::NumberOfOwnDescriptorsBits>(
-        LoadMapBitField3(backpointer));
-    GotoIfNot(Word32Equal(previous_nof, descriptor_number), slow);
-
-    // Preconditions successful, perform the map rollback!
-    // Zap the property to avoid keeping objects alive.
-    // Zapping is not necessary for properties stored in the descriptor array.
-    Label zapping_done(this);
-    GotoIf(Word32NotEqual(DecodeWord32<PropertyDetails::LocationField>(details),
-                          Int32Constant(kField)),
-           &zapping_done);
-    Node* field_index =
-        DecodeWordFromWord32<PropertyDetails::FieldIndexField>(details);
-    Node* inobject_properties = LoadMapInobjectProperties(receiver_map);
-    Label inobject(this), backing_store(this);
-    // Due to inobject slack tracking, a field currently within the object
-    // could later be between objects. Use the one pointer filler map for
-    // zapping the deleted field to make this safe.
-    Node* filler = LoadRoot(Heap::kOnePointerFillerMapRootIndex);
-    DCHECK(Heap::RootIsImmortalImmovable(Heap::kOnePointerFillerMapRootIndex));
-    Branch(UintPtrLessThan(field_index, inobject_properties), &inobject,
-           &backing_store);
-    BIND(&inobject);
-    {
-      Node* field_offset =
-          IntPtrMul(IntPtrSub(LoadMapInstanceSize(receiver_map),
-                              IntPtrSub(inobject_properties, field_index)),
-                    IntPtrConstant(kPointerSize));
-      StoreObjectFieldNoWriteBarrier(receiver, field_offset, filler);
-      Goto(&zapping_done);
-    }
-    BIND(&backing_store);
-    {
-      Node* backing_store_index = IntPtrSub(field_index, inobject_properties);
-      StoreFixedArrayElement(properties, backing_store_index, filler,
-                             SKIP_WRITE_BARRIER);
-      Goto(&zapping_done);
-    }
-    BIND(&zapping_done);
-    StoreMap(receiver, backpointer);
-    Return(TrueConstant());
-  }
-
   void DeleteDictionaryProperty(Node* receiver, Node* properties, Node* name,
                                 Node* context, Label* dont_delete,
                                 Label* notfound) {
@@ -268,7 +189,7 @@ class DeletePropertyBaseAssembler : public CodeStubAssembler {
     StoreValueByKeyIndex<NameDictionary>(properties, key_index, filler,
                                          SKIP_WRITE_BARRIER);
     StoreDetailsByKeyIndex<NameDictionary>(properties, key_index,
-                                           SmiConstant(Smi::kZero));
+                                           SmiConstant(0));
 
     // Update bookkeeping information (see NameDictionary::ElementRemoved).
     Node* nof = GetNumberOfElements<NameDictionary>(properties);
@@ -283,7 +204,7 @@ class DeletePropertyBaseAssembler : public CodeStubAssembler {
     Node* capacity = GetCapacity<NameDictionary>(properties);
     GotoIf(SmiGreaterThan(new_nof, SmiShr(capacity, 2)), &shrinking_done);
     GotoIf(SmiLessThan(new_nof, SmiConstant(16)), &shrinking_done);
-    CallRuntime(Runtime::kShrinkPropertyDictionary, context, receiver, name);
+    CallRuntime(Runtime::kShrinkPropertyDictionary, context, receiver);
     Goto(&shrinking_done);
     BIND(&shrinking_done);
 
@@ -328,8 +249,9 @@ TF_BUILTIN(DeleteProperty, DeletePropertyBaseAssembler) {
     Node* properties_map = LoadMap(properties);
     GotoIf(WordEqual(properties_map, LoadRoot(Heap::kHashTableMapRootIndex)),
            &dictionary);
-    DeleteFastProperty(receiver, receiver_map, properties, unique, &dont_delete,
-                       &if_notfound, &slow);
+    // Fast properties need to clear recorded slots, which can only be done
+    // in C++.
+    Goto(&slow);
 
     BIND(&dictionary);
     {

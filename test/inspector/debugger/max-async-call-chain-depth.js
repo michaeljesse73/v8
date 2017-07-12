@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-InspectorTest.log('Checks that we trim async call chains correctly.');
+// TODO(kozyatinskiy): fix or remove it later.
+let {session, contextGroup, Protocol} = InspectorTest.start('Checks that we trim async call chains correctly.');
 
 Protocol.Debugger.enable();
 InspectorTest.log('set async chain depth to 8');

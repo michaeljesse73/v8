@@ -6739,6 +6739,34 @@ TEST(ParentFramePointer) {
   CHECK_EQ(1, r.Call(1));
 }
 
+#if V8_HOST_ARCH_MIPS || V8_HOST_ARCH_MIPS64
+
+TEST(StackSlotAlignment) {
+  RawMachineAssemblerTester<int32_t> r;
+  RawMachineLabel tlabel;
+  RawMachineLabel flabel;
+  RawMachineLabel merge;
+
+  int alignments[] = {4, 8, 16};
+  int alignment_count = arraysize(alignments);
+
+  Node* alignment_counter = r.Int32Constant(0);
+  for (int i = 0; i < alignment_count; i++) {
+    for (int j = 0; j < 5; j++) {
+      Node* stack_slot =
+          r.StackSlot(MachineRepresentation::kWord32, alignments[i]);
+      alignment_counter = r.Int32Add(
+          alignment_counter,
+          r.Word32And(stack_slot, r.Int32Constant(alignments[i] - 1)));
+    }
+  }
+
+  r.Return(alignment_counter);
+  CHECK_EQ(0, r.Call());
+}
+
+#endif  // V8_HOST_ARCH_MIPS || V8_HOST_ARCH_MIPS64
+
 #if V8_TARGET_ARCH_64_BIT
 
 TEST(Regression5923) {
@@ -6815,6 +6843,19 @@ TEST(Regression5951_32bit) {
   CHECK_EQ(input, m.Call(input));
 }
 
+TEST(Regression738952) {
+  RawMachineAssemblerTester<int32_t> m;
+
+  int32_t sentinel = 1234;
+  // The index can be any value where the lower bits are 0 and the upper bits
+  // are not 0;
+  int64_t index = 3224;
+  index <<= 32;
+  double d = static_cast<double>(index);
+  m.Return(m.Load(MachineType::Int32(), m.PointerConstant(&sentinel),
+                  m.TruncateFloat64ToWord32(m.Float64Constant(d))));
+  CHECK_EQ(sentinel, m.Call());
+}
 }  // namespace compiler
 }  // namespace internal
 }  // namespace v8

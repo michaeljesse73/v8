@@ -44,6 +44,7 @@
 #include <vector>
 
 #include "src/assembler.h"
+#include "src/double.h"
 #include "src/ppc/constants-ppc.h"
 
 #if V8_HOST_ARCH_PPC && \
@@ -405,7 +406,7 @@ class Assembler : public AssemblerBase {
   // GetCode emits any pending (non-emitted) code and fills the descriptor
   // desc. GetCode() is idempotent; it returns the same result if no other
   // Assembler functions are invoked in between GetCode() calls.
-  void GetCode(CodeDesc* desc);
+  void GetCode(Isolate* isolate, CodeDesc* desc);
 
   // Label operations & relative jumps (PPUM Appendix D)
   //
@@ -1263,22 +1264,6 @@ class Assembler : public AssemblerBase {
   // Mark address of a debug break slot.
   void RecordDebugBreakSlot(RelocInfo::Mode mode);
 
-  // Record the AST id of the CallIC being compiled, so that it can be placed
-  // in the relocation information.
-  void SetRecordedAstId(TypeFeedbackId ast_id) {
-    // Causes compiler to fail
-    // DCHECK(recorded_ast_id_.IsNone());
-    recorded_ast_id_ = ast_id;
-  }
-
-  TypeFeedbackId RecordedAstId() {
-    // Causes compiler to fail
-    // DCHECK(!recorded_ast_id_.IsNone());
-    return recorded_ast_id_;
-  }
-
-  void ClearRecordedAstId() { recorded_ast_id_ = TypeFeedbackId::None(); }
-
   // Record a comment relocation entry that can be used by a disassembler.
   // Use --code-comments to enable.
   void RecordComment(const char* msg);
@@ -1372,11 +1357,6 @@ class Assembler : public AssemblerBase {
   void EmitRelocations();
 
  protected:
-  // Relocation for a type-recording IC has the AST id added to it.  This
-  // member variable is a way to pass the information from the call site to
-  // the relocation info.
-  TypeFeedbackId recorded_ast_id_;
-
   int buffer_space() const { return reloc_info_writer.pos() - pc_; }
 
   // Decode instruction(s) at pos and return backchain to previous
@@ -1395,7 +1375,7 @@ class Assembler : public AssemblerBase {
                         is_constant_pool_entry_sharing_blocked());
     return constant_pool_builder_.AddEntry(pc_offset(), value, sharing_ok);
   }
-  ConstantPoolEntry::Access ConstantPoolAddEntry(double value) {
+  ConstantPoolEntry::Access ConstantPoolAddEntry(Double value) {
     return constant_pool_builder_.AddEntry(pc_offset(), value);
   }
 
@@ -1538,6 +1518,19 @@ class Assembler : public AssemblerBase {
 
   Trampoline trampoline_;
   bool internal_trampoline_exception_;
+
+  // The following functions help with avoiding allocations of embedded heap
+  // objects during the code assembly phase. {RequestHeapObject} records the
+  // need for a future heap number allocation or code stub generation. After
+  // code assembly, {AllocateAndInstallRequestedHeapObjects} will allocate these
+  // objects and place them where they are expected (determined by the pc offset
+  // associated with each request). That is, for each request, it will patch the
+  // dummy heap object handle that we emitted during code assembly with the
+  // actual heap object handle.
+
+  void RequestHeapObject(HeapObjectRequest request);
+  void AllocateAndInstallRequestedHeapObjects(Isolate* isolate);
+  std::forward_list<HeapObjectRequest> heap_object_requests_;
 
   friend class RegExpMacroAssemblerPPC;
   friend class RelocInfo;

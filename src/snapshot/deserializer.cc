@@ -116,15 +116,17 @@ void Deserializer::Deserialize(Isolate* isolate) {
         isolate_->heap()->undefined_value());
   }
 
-  // If needed, print the dissassembly of deserialized code objects.
-  PrintDisassembledCodeObjects();
-
   // Issue code events for newly deserialized code objects.
   LOG_CODE_EVENT(isolate_, LogCodeObjects());
   LOG_CODE_EVENT(isolate_, LogBytecodeHandlers());
   LOG_CODE_EVENT(isolate_, LogCompiledFunctions());
 
   isolate_->builtins()->MarkInitialized();
+
+  // If needed, print the dissassembly of deserialized code objects.
+  // Needs to be called after the builtins are marked as initialized, in order
+  // to display the builtin names.
+  PrintDisassembledCodeObjects();
 }
 
 MaybeHandle<Object> Deserializer::DeserializePartial(
@@ -148,7 +150,8 @@ MaybeHandle<Object> Deserializer::DeserializePartial(
   DeserializeDeferredObjects();
   DeserializeEmbedderFields(embedder_fields_deserializer);
 
-  isolate->heap()->RegisterReservationsForBlackAllocation(reservations_);
+  isolate->heap()->RegisterDeserializedObjectsForBlackAllocation(
+      reservations_, &deserialized_large_objects_);
 
   // There's no code deserialized here. If this assert fires then that's
   // changed and logging should be added to notify the profiler et al of the
@@ -172,7 +175,8 @@ MaybeHandle<HeapObject> Deserializer::DeserializeObject(Isolate* isolate) {
       DeserializeDeferredObjects();
       FlushICacheForNewCodeObjectsAndRecordEmbeddedObjects();
       result = Handle<HeapObject>(HeapObject::cast(root));
-      isolate->heap()->RegisterReservationsForBlackAllocation(reservations_);
+      isolate->heap()->RegisterDeserializedObjectsForBlackAllocation(
+          reservations_, &deserialized_large_objects_);
     }
     CommitPostProcessedObjects(isolate);
     return scope.CloseAndEscape(result);
@@ -279,34 +283,33 @@ void Deserializer::PrintDisassembledCodeObjects() {
 }
 
 // Used to insert a deserialized internalized string into the string table.
-class StringTableInsertionKey : public HashTableKey {
+class StringTableInsertionKey : public StringTableKey {
  public:
   explicit StringTableInsertionKey(String* string)
-      : string_(string), hash_(HashForObject(string)) {
+      : StringTableKey(ComputeHashField(string)), string_(string) {
     DCHECK(string->IsInternalizedString());
   }
 
   bool IsMatch(Object* string) override {
     // We know that all entries in a hash table had their hash keys created.
     // Use that knowledge to have fast failure.
-    if (hash_ != HashForObject(string)) return false;
+    if (Hash() != String::cast(string)->Hash()) return false;
     // We want to compare the content of two internalized strings here.
     return string_->SlowEquals(String::cast(string));
   }
 
-  uint32_t Hash() override { return hash_; }
-
-  uint32_t HashForObject(Object* key) override {
-    return String::cast(key)->Hash();
-  }
-
-  MUST_USE_RESULT Handle<Object> AsHandle(Isolate* isolate) override {
+  MUST_USE_RESULT Handle<String> AsHandle(Isolate* isolate) override {
     return handle(string_, isolate);
   }
 
  private:
+  uint32_t ComputeHashField(String* string) {
+    // Make sure hash_field() is computed.
+    string->Hash();
+    return string->hash_field();
+  }
+
   String* string_;
-  uint32_t hash_;
   DisallowHeapAllocation no_gc;
 };
 
@@ -336,7 +339,6 @@ HeapObject* Deserializer::PostProcessNewObject(HeapObject* obj, int space) {
     }
   }
   if (obj->IsAllocationSite()) {
-    DCHECK(obj->IsAllocationSite());
     // Allocation sites are present in the snapshot, and must be linked into
     // a list at deserialization time.
     AllocationSite* site = AllocationSite::cast(obj);

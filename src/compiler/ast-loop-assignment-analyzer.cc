@@ -149,11 +149,9 @@ void ALAA::VisitObjectLiteral(ObjectLiteral* e) {
 
 void ALAA::VisitArrayLiteral(ArrayLiteral* e) { VisitExpressions(e->values()); }
 
-void ALAA::VisitSuspend(Suspend* stmt) {
-  Visit(stmt->generator_object());
-  Visit(stmt->expression());
-}
+void ALAA::VisitSuspend(Suspend* e) { Visit(e->expression()); }
 
+void ALAA::VisitYieldStar(YieldStar* e) { Visit(e->expression()); }
 
 void ALAA::VisitThrow(Throw* stmt) { Visit(stmt->exception()); }
 

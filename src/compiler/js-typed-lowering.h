@@ -42,6 +42,8 @@ class V8_EXPORT_PRIVATE JSTypedLowering final
                   Flags flags, JSGraph* jsgraph, Zone* zone);
   ~JSTypedLowering() final {}
 
+  const char* reducer_name() const override { return "JSTypedLowering"; }
+
   Reduction Reduce(Node* node) final;
 
  private:
@@ -52,6 +54,7 @@ class V8_EXPORT_PRIVATE JSTypedLowering final
   Reduction ReduceJSLoadNamed(Node* node);
   Reduction ReduceJSLoadProperty(Node* node);
   Reduction ReduceJSStoreProperty(Node* node);
+  Reduction ReduceJSHasInPrototypeChain(Node* node);
   Reduction ReduceJSOrdinaryHasInstance(Node* node);
   Reduction ReduceJSLoadContext(Node* node);
   Reduction ReduceJSStoreContext(Node* node);
@@ -67,8 +70,11 @@ class V8_EXPORT_PRIVATE JSTypedLowering final
   Reduction ReduceJSToNumber(Node* node);
   Reduction ReduceJSToStringInput(Node* input);
   Reduction ReduceJSToString(Node* node);
+  Reduction ReduceJSToPrimitiveToString(Node* node);
+  Reduction ReduceJSStringConcat(Node* node);
   Reduction ReduceJSToObject(Node* node);
   Reduction ReduceJSConvertReceiver(Node* node);
+  Reduction ReduceJSConstructForwardVarargs(Node* node);
   Reduction ReduceJSConstruct(Node* node);
   Reduction ReduceJSCallForwardVarargs(Node* node);
   Reduction ReduceJSCall(Node* node);
@@ -87,6 +93,16 @@ class V8_EXPORT_PRIVATE JSTypedLowering final
   Reduction ReduceSpeculativeNumberMultiply(Node* node);
   Reduction ReduceSpeculativeNumberBinop(Node* node);
   Reduction ReduceSpeculativeNumberComparison(Node* node);
+
+  // Helper for ReduceJSLoadModule and ReduceJSStoreModule.
+  Node* BuildGetModuleCell(Node* node);
+
+  // Helpers for ReduceJSCreateConsString and ReduceJSStringConcat.
+  Node* BuildGetStringLength(Node* value, Node** effect, Node* control);
+  void BuildThrowStringRangeError(Node* node, Node* context, Node* frame_state,
+                                  Node* effect, Node* control);
+  Node* BuildCreateConsString(Node* first, Node* second, Node* length,
+                              Node* effect, Node* control);
 
   Factory* factory() const;
   Graph* graph() const;

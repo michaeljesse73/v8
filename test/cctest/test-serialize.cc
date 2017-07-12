@@ -1090,7 +1090,7 @@ TEST(CodeSerializerLargeCodeObject) {
   Vector<const uint8_t> source =
       ConstructSource(STATIC_CHAR_VECTOR("var j=1; if (j == 0) {"),
                       STATIC_CHAR_VECTOR("for (let i of Object.prototype);"),
-                      STATIC_CHAR_VECTOR("} j=7; j"), 1050);
+                      STATIC_CHAR_VECTOR("} j=7; j"), 1100);
   Handle<String> source_str =
       isolate->factory()->NewStringFromOneByte(source).ToHandleChecked();
 
@@ -1126,6 +1126,89 @@ TEST(CodeSerializerLargeCodeObject) {
   source.Dispose();
 }
 
+TEST(CodeSerializerLargeCodeObjectWithIncrementalMarking) {
+  if (FLAG_never_compact) return;
+  FLAG_stress_incremental_marking = false;
+  FLAG_serialize_toplevel = true;
+  FLAG_always_opt = false;
+  // This test relies on (full-codegen) code objects going to large object
+  // space. Once FCG goes away, it must either be redesigned (to put some
+  // other large deserialized object into LO space), or it can be deleted.
+  FLAG_ignition = false;
+  const char* filter_flag = "--turbo-filter=NOTHING";
+  FlagList::SetFlagsFromString(filter_flag, StrLength(filter_flag));
+  FLAG_black_allocation = true;
+  FLAG_manual_evacuation_candidates_selection = true;
+
+  LocalContext context;
+  Isolate* isolate = CcTest::i_isolate();
+  Heap* heap = isolate->heap();
+  isolate->compilation_cache()->Disable();  // Disable same-isolate code cache.
+
+  v8::HandleScope scope(CcTest::isolate());
+
+  Vector<const uint8_t> source = ConstructSource(
+      STATIC_CHAR_VECTOR("var j=1; if (j == 0) {"),
+      STATIC_CHAR_VECTOR("for (var i = 0; i < Object.prototype; i++);"),
+      STATIC_CHAR_VECTOR("} j=7; var s = 'happy_hippo'; j"), 2200);
+  Handle<String> source_str =
+      isolate->factory()->NewStringFromOneByte(source).ToHandleChecked();
+
+  // Create a string on an evacuation candidate in old space.
+  Handle<String> moving_object;
+  Page* ec_page;
+  {
+    AlwaysAllocateScope always_allocate(isolate);
+    heap::SimulateFullSpace(heap->old_space());
+    moving_object = isolate->factory()->InternalizeString(
+        isolate->factory()->NewStringFromAsciiChecked("happy_hippo"));
+    ec_page = Page::FromAddress(moving_object->address());
+  }
+
+  Handle<JSObject> global(isolate->context()->global_object());
+  ScriptData* cache = NULL;
+
+  Handle<SharedFunctionInfo> orig =
+      CompileScript(isolate, source_str, Handle<String>(), &cache,
+                    v8::ScriptCompiler::kProduceCodeCache);
+
+  CHECK(heap->InSpace(orig->abstract_code(), LO_SPACE));
+
+  // Pretend that incremental marking is on when deserialization begins.
+  heap::ForceEvacuationCandidate(ec_page);
+  heap::SimulateIncrementalMarking(heap, false);
+  IncrementalMarking* marking = heap->incremental_marking();
+  marking->StartBlackAllocationForTesting();
+  CHECK(marking->IsCompacting());
+  CHECK(MarkCompactCollector::IsOnEvacuationCandidate(*moving_object));
+
+  Handle<SharedFunctionInfo> copy;
+  {
+    DisallowCompilation no_compile_expected(isolate);
+    copy = CompileScript(isolate, source_str, Handle<String>(), &cache,
+                         v8::ScriptCompiler::kConsumeCodeCache);
+  }
+  CHECK_NE(*orig, *copy);
+
+  // We should have missed a write barrier. Complete incremental marking
+  // to flush out the bug.
+  heap::SimulateIncrementalMarking(heap, true);
+  CcTest::CollectAllGarbage();
+
+  Handle<JSFunction> copy_fun =
+      isolate->factory()->NewFunctionFromSharedFunctionInfo(
+          copy, isolate->native_context());
+
+  Handle<Object> copy_result =
+      Execution::Call(isolate, copy_fun, global, 0, NULL).ToHandleChecked();
+
+  int result_int;
+  CHECK(copy_result->ToInt32(&result_int));
+  CHECK_EQ(7, result_int);
+
+  delete cache;
+  source.Dispose();
+}
 TEST(CodeSerializerLargeStrings) {
   FLAG_serialize_toplevel = true;
   LocalContext context;
@@ -1690,7 +1773,7 @@ TEST(CodeSerializerWithHarmonyScoping) {
 }
 
 TEST(CodeSerializerEagerCompilationAndPreAge) {
-  if (FLAG_ignition || FLAG_turbo) return;
+  if (FLAG_ignition) return;
 
   FLAG_lazy = true;
   FLAG_serialize_toplevel = true;
@@ -1795,7 +1878,7 @@ TEST(CodeSerializerCell) {
     masm->movp(rax, Operand(rax, 0));
     masm->ret(0);
     CodeDesc desc;
-    masm->GetCode(&desc);
+    masm->GetCode(isolate, &desc);
     code = isolate->factory()->NewCode(desc, Code::ComputeFlags(Code::FUNCTION),
                                        masm->CodeObject());
     code->set_has_reloc_info_for_serialization(true);
@@ -1837,14 +1920,14 @@ TEST(CodeSerializerEmbeddedObject) {
   MacroAssembler assembler(isolate, buffer, static_cast<int>(actual_size),
                            v8::internal::CodeObjectRequired::kYes);
   assembler.enable_serializer();
-  Handle<Object> number = isolate->factory()->NewHeapNumber(0.3);
+  Handle<HeapNumber> number = isolate->factory()->NewHeapNumber(0.3);
   CHECK(isolate->heap()->InNewSpace(*number));
   Handle<Code> code;
   {
     MacroAssembler* masm = &assembler;
     masm->Push(number);
     CodeDesc desc;
-    masm->GetCode(&desc);
+    masm->GetCode(isolate, &desc);
     code = isolate->factory()->NewCode(desc, Code::ComputeFlags(Code::FUNCTION),
                                        masm->CodeObject());
     code->set_has_reloc_info_for_serialization(true);

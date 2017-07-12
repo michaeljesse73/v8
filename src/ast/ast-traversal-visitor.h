@@ -136,6 +136,9 @@ void AstTraversalVisitor<Subclass>::VisitFunctionDeclaration(
 template <class Subclass>
 void AstTraversalVisitor<Subclass>::VisitBlock(Block* stmt) {
   PROCESS_NODE(stmt);
+  if (stmt->scope() != nullptr) {
+    RECURSE_EXPRESSION(VisitDeclarations(stmt->scope()->declarations()));
+  }
   RECURSE(VisitStatements(stmt->statements()));
 }
 
@@ -359,7 +362,12 @@ void AstTraversalVisitor<Subclass>::VisitAssignment(Assignment* expr) {
 template <class Subclass>
 void AstTraversalVisitor<Subclass>::VisitSuspend(Suspend* expr) {
   PROCESS_EXPRESSION(expr);
-  RECURSE_EXPRESSION(Visit(expr->generator_object()));
+  RECURSE_EXPRESSION(Visit(expr->expression()));
+}
+
+template <class Subclass>
+void AstTraversalVisitor<Subclass>::VisitYieldStar(YieldStar* expr) {
+  PROCESS_EXPRESSION(expr);
   RECURSE_EXPRESSION(Visit(expr->expression()));
 }
 

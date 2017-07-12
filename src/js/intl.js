@@ -29,15 +29,11 @@ var GlobalNumber = global.Number;
 var GlobalRegExp = global.RegExp;
 var GlobalString = global.String;
 var IntlFallbackSymbol = utils.ImportNow("intl_fallback_symbol");
-var InstallFunctions = utils.InstallFunctions;
-var InstallGetter = utils.InstallGetter;
 var InternalArray = utils.InternalArray;
 var MaxSimple;
 var ObjectHasOwnProperty = global.Object.prototype.hasOwnProperty;
-var OverrideFunction = utils.OverrideFunction;
 var patternSymbol = utils.ImportNow("intl_pattern_symbol");
 var resolvedSymbol = utils.ImportNow("intl_resolved_symbol");
-var SetFunctionName = utils.SetFunctionName;
 var StringSubstr = GlobalString.prototype.substr;
 var StringSubstring = GlobalString.prototype.substring;
 
@@ -49,11 +45,6 @@ utils.Import(function(from) {
 
 // Utilities for definitions
 
-function InstallFunction(object, name, func) {
-  InstallFunctions(object, DONT_ENUM, [name, func]);
-}
-
-
 /**
  * Adds bound method to the prototype of the given object.
  */
@@ -61,41 +52,36 @@ function AddBoundMethod(obj, methodName, implementation, length, typename,
                         compat) {
   %CheckIsBootstrapping();
   var internalName = %CreatePrivateSymbol(methodName);
-  // Making getter an anonymous function will cause
-  // %DefineGetterPropertyUnchecked to properly set the "name"
-  // property on each JSFunction instance created here, rather
-  // than (as utils.InstallGetter would) on the SharedFunctionInfo
-  // associated with all functions returned from AddBoundMethod.
-  var getter = ANONYMOUS_FUNCTION(function() {
-    var receiver = Unwrap(this, typename, obj, methodName, compat);
-    if (IS_UNDEFINED(receiver[internalName])) {
-      var boundMethod;
-      if (IS_UNDEFINED(length) || length === 2) {
-        boundMethod =
-          ANONYMOUS_FUNCTION((fst, snd) => implementation(receiver, fst, snd));
-      } else if (length === 1) {
-        boundMethod = ANONYMOUS_FUNCTION(fst => implementation(receiver, fst));
-      } else {
-        boundMethod = ANONYMOUS_FUNCTION((...args) => {
-          // DateTimeFormat.format needs to be 0 arg method, but can still
-          // receive an optional dateValue param. If one was provided, pass it
-          // along.
-          if (args.length > 0) {
-            return implementation(receiver, args[0]);
-          } else {
-            return implementation(receiver);
-          }
-        });
-      }
-      %SetNativeFlag(boundMethod);
-      receiver[internalName] = boundMethod;
-    }
-    return receiver[internalName];
-  });
 
-  %FunctionRemovePrototype(getter);
-  %DefineGetterPropertyUnchecked(obj.prototype, methodName, getter, DONT_ENUM);
-  %SetNativeFlag(getter);
+  DEFINE_METHOD(
+    obj.prototype,
+    get [methodName]() {
+      var receiver = Unwrap(this, typename, obj, methodName, compat);
+      if (IS_UNDEFINED(receiver[internalName])) {
+        var boundMethod;
+        if (IS_UNDEFINED(length) || length === 2) {
+          boundMethod =
+            ANONYMOUS_FUNCTION((fst, snd) => implementation(receiver, fst, snd));
+        } else if (length === 1) {
+          boundMethod = ANONYMOUS_FUNCTION(fst => implementation(receiver, fst));
+        } else {
+          boundMethod = ANONYMOUS_FUNCTION((...args) => {
+            // DateTimeFormat.format needs to be 0 arg method, but can still
+            // receive an optional dateValue param. If one was provided, pass it
+            // along.
+            if (args.length > 0) {
+              return implementation(receiver, args[0]);
+            } else {
+              return implementation(receiver);
+            }
+          });
+        }
+        %SetNativeFlag(boundMethod);
+        receiver[internalName] = boundMethod;
+      }
+      return receiver[internalName];
+    }
+  );
 }
 
 function IntlConstruct(receiver, constructor, create, newTarget, args,
@@ -146,18 +132,18 @@ var AVAILABLE_LOCALES = {
  */
 var DEFAULT_ICU_LOCALE = UNDEFINED;
 
-function GetDefaultICULocaleJS() {
+function GetDefaultICULocaleJS(service) {
   if (IS_UNDEFINED(DEFAULT_ICU_LOCALE)) {
     DEFAULT_ICU_LOCALE = %GetDefaultICULocale();
-    // Check that this is a valid default, otherwise fall back to "und"
-    for (let service in AVAILABLE_LOCALES) {
-      if (IS_UNDEFINED(getAvailableLocalesOf(service)[DEFAULT_ICU_LOCALE])) {
-        DEFAULT_ICU_LOCALE = "und";
-        break;
-      }
-    }
   }
-  return DEFAULT_ICU_LOCALE;
+  // Check that this is a valid default for this service,
+  // otherwise fall back to "und"
+  // TODO(littledan,jshin): AvailableLocalesOf sometimes excludes locales
+  // which don't require tailoring, but work fine with root data. Look into
+  // exposing this fact in ICU or the way Chrome bundles data.
+  return (IS_UNDEFINED(service) ||
+          HAS_OWN_PROPERTY(getAvailableLocalesOf(service), DEFAULT_ICU_LOCALE))
+         ? DEFAULT_ICU_LOCALE : "und";
 }
 
 /**
@@ -449,7 +435,7 @@ function lookupMatcher(service, requestedLocales) {
         var extensionMatch = %regexp_internal_match(
             GetUnicodeExtensionRE(), requestedLocales[i]);
         var extension = IS_NULL(extensionMatch) ? '' : extensionMatch[0];
-        return {'locale': locale, 'extension': extension, 'position': i};
+        return {locale: locale, extension: extension, position: i};
       }
       // Truncate locale if possible.
       var pos = %StringLastIndexOf(locale, '-');
@@ -461,7 +447,11 @@ function lookupMatcher(service, requestedLocales) {
   }
 
   // Didn't find a match, return default.
-  return {'locale': GetDefaultICULocaleJS(), 'extension': '', 'position': -1};
+  return {
+    locale: GetDefaultICULocaleJS(service),
+    extension: '',
+    position: -1
+  };
 }
 
 
@@ -620,33 +610,6 @@ function makeArray(input) {
   %MoveArrayContents(input, array);
   return array;
 }
-
-/**
- * It's sometimes desireable to leave user requested locale instead of ICU
- * supported one (zh-TW is equivalent to zh-Hant-TW, so we should keep shorter
- * one, if that was what user requested).
- * This function returns user specified tag if its maximized form matches ICU
- * resolved locale. If not we return ICU result.
- */
-function getOptimalLanguageTag(original, resolved) {
-  // Returns Array<Object>, where each object has maximized and base properties.
-  // Maximized: zh -> zh-Hans-CN
-  // Base: zh-CN-u-ca-gregory -> zh-CN
-  // Take care of grandfathered or simple cases.
-  if (original === resolved) {
-    return original;
-  }
-
-  var locales = %GetLanguageTagVariants([original, resolved]);
-  if (locales[0].maximized !== locales[1].maximized) {
-    return resolved;
-  }
-
-  // Preserve extensions of resolved locale, but swap base tags with original.
-  var resolvedBase = new GlobalRegExp('^' + locales[1].base, 'g');
-  return %RegExpInternalReplace(resolvedBase, resolved, locales[0].base);
-}
-
 
 /**
  * Returns an Object that contains all of supported locales for a given
@@ -937,7 +900,9 @@ function BuildLanguageTagREs() {
 }
 
 // ECMA 402 section 8.2.1
-InstallFunction(GlobalIntl, 'getCanonicalLocales', function(locales) {
+DEFINE_METHOD(
+  GlobalIntl,
+  getCanonicalLocales(locales) {
     return makeArray(canonicalizeLocaleList(locales));
   }
 );
@@ -1058,14 +1023,13 @@ function CollatorConstructor() {
 /**
  * Collator resolvedOptions method.
  */
-InstallFunction(GlobalIntlCollator.prototype, 'resolvedOptions', function() {
+DEFINE_METHOD(
+  GlobalIntlCollator.prototype,
+  resolvedOptions() {
     var coll = Unwrap(this, 'collator', GlobalIntlCollator, 'resolvedOptions',
                       false);
-    var locale = getOptimalLanguageTag(coll[resolvedSymbol].requestedLocale,
-                                       coll[resolvedSymbol].locale);
-
     return {
-      locale: locale,
+      locale: coll[resolvedSymbol].locale,
       usage: coll[resolvedSymbol].usage,
       sensitivity: coll[resolvedSymbol].sensitivity,
       ignorePunctuation: coll[resolvedSymbol].ignorePunctuation,
@@ -1083,7 +1047,9 @@ InstallFunction(GlobalIntlCollator.prototype, 'resolvedOptions', function() {
  * order in the returned list as in the input list.
  * Options are optional parameter.
  */
-InstallFunction(GlobalIntlCollator, 'supportedLocalesOf', function(locales) {
+DEFINE_METHOD(
+  GlobalIntlCollator,
+  supportedLocalesOf(locales) {
     return supportedLocalesOf('collator', locales, arguments[1]);
   }
 );
@@ -1280,15 +1246,13 @@ function NumberFormatConstructor() {
 /**
  * NumberFormat resolvedOptions method.
  */
-InstallFunction(GlobalIntlNumberFormat.prototype, 'resolvedOptions',
-  function() {
+DEFINE_METHOD(
+  GlobalIntlNumberFormat.prototype,
+  resolvedOptions() {
     var format = Unwrap(this, 'numberformat', GlobalIntlNumberFormat,
                         'resolvedOptions', true);
-    var locale = getOptimalLanguageTag(format[resolvedSymbol].requestedLocale,
-                                       format[resolvedSymbol].locale);
-
     var result = {
-      locale: locale,
+      locale: format[resolvedSymbol].locale,
       numberingSystem: format[resolvedSymbol].numberingSystem,
       style: format[resolvedSymbol].style,
       useGrouping: format[resolvedSymbol].useGrouping,
@@ -1324,8 +1288,9 @@ InstallFunction(GlobalIntlNumberFormat.prototype, 'resolvedOptions',
  * order in the returned list as in the input list.
  * Options are optional parameter.
  */
-InstallFunction(GlobalIntlNumberFormat, 'supportedLocalesOf',
-  function(locales) {
+DEFINE_METHOD(
+  GlobalIntlNumberFormat,
+  supportedLocalesOf(locales) {
     return supportedLocalesOf('numberformat', locales, arguments[1]);
   }
 );
@@ -1643,8 +1608,9 @@ function DateTimeFormatConstructor() {
 /**
  * DateTimeFormat resolvedOptions method.
  */
-InstallFunction(GlobalIntlDateTimeFormat.prototype, 'resolvedOptions',
-  function() {
+DEFINE_METHOD(
+  GlobalIntlDateTimeFormat.prototype,
+  resolvedOptions() {
     var format = Unwrap(this, 'dateformat', GlobalIntlDateTimeFormat,
                         'resolvedOptions', true);
 
@@ -1666,11 +1632,8 @@ InstallFunction(GlobalIntlDateTimeFormat.prototype, 'resolvedOptions',
       userCalendar = format[resolvedSymbol].calendar;
     }
 
-    var locale = getOptimalLanguageTag(format[resolvedSymbol].requestedLocale,
-                                       format[resolvedSymbol].locale);
-
     var result = {
-      locale: locale,
+      locale: format[resolvedSymbol].locale,
       numberingSystem: format[resolvedSymbol].numberingSystem,
       calendar: userCalendar,
       timeZone: format[resolvedSymbol].timeZone
@@ -1698,8 +1661,9 @@ InstallFunction(GlobalIntlDateTimeFormat.prototype, 'resolvedOptions',
  * order in the returned list as in the input list.
  * Options are optional parameter.
  */
-InstallFunction(GlobalIntlDateTimeFormat, 'supportedLocalesOf',
-  function(locales) {
+DEFINE_METHOD(
+  GlobalIntlDateTimeFormat,
+  supportedLocalesOf(locales) {
     return supportedLocalesOf('dateformat', locales, arguments[1]);
   }
 );
@@ -1723,8 +1687,9 @@ function formatDate(formatter, dateValue) {
   return %InternalDateFormat(formatter, new GlobalDate(dateMs));
 }
 
-InstallFunction(GlobalIntlDateTimeFormat.prototype, 'formatToParts',
-  function(dateValue) {
+DEFINE_METHOD(
+  GlobalIntlDateTimeFormat.prototype,
+  formatToParts(dateValue) {
     CHECK_OBJECT_COERCIBLE(this, "Intl.DateTimeFormat.prototype.formatToParts");
     if (!IS_OBJECT(this)) {
       throw %make_type_error(kCalledOnNonObject, this);
@@ -1842,8 +1807,9 @@ function v8BreakIteratorConstructor() {
 /**
  * BreakIterator resolvedOptions method.
  */
-InstallFunction(GlobalIntlv8BreakIterator.prototype, 'resolvedOptions',
-  function() {
+DEFINE_METHOD(
+  GlobalIntlv8BreakIterator.prototype,
+  resolvedOptions() {
     if (!IS_UNDEFINED(new.target)) {
       throw %make_type_error(kOrdinaryFunctionCalledAsConstructor);
     }
@@ -1851,12 +1817,8 @@ InstallFunction(GlobalIntlv8BreakIterator.prototype, 'resolvedOptions',
     var segmenter = Unwrap(this, 'breakiterator', GlobalIntlv8BreakIterator,
                            'resolvedOptions', false);
 
-    var locale =
-        getOptimalLanguageTag(segmenter[resolvedSymbol].requestedLocale,
-                              segmenter[resolvedSymbol].locale);
-
     return {
-      locale: locale,
+      locale: segmenter[resolvedSymbol].locale,
       type: segmenter[resolvedSymbol].type
     };
   }
@@ -1869,8 +1831,9 @@ InstallFunction(GlobalIntlv8BreakIterator.prototype, 'resolvedOptions',
  * order in the returned list as in the input list.
  * Options are optional parameter.
  */
-InstallFunction(GlobalIntlv8BreakIterator, 'supportedLocalesOf',
-  function(locales) {
+DEFINE_METHOD(
+  GlobalIntlv8BreakIterator,
+  supportedLocalesOf(locales) {
     if (!IS_UNDEFINED(new.target)) {
       throw %make_type_error(kOrdinaryFunctionCalledAsConstructor);
     }
@@ -2012,7 +1975,9 @@ function LocaleConvertCase(s, locales, isToUpper) {
  * Compares this and that, and returns less than 0, 0 or greater than 0 value.
  * Overrides the built-in method.
  */
-OverrideFunction(GlobalString.prototype, 'localeCompare', function(that) {
+DEFINE_METHOD(
+  GlobalString.prototype,
+  localeCompare(that) {
     if (IS_NULL_OR_UNDEFINED(this)) {
       throw %make_type_error(kMethodInvokedOnNullOrUndefined);
     }
@@ -2024,26 +1989,31 @@ OverrideFunction(GlobalString.prototype, 'localeCompare', function(that) {
   }
 );
 
-function ToLocaleLowerCaseIntl(locales) {
-  CHECK_OBJECT_COERCIBLE(this, "String.prototype.toLocaleLowerCase");
-  return LocaleConvertCase(TO_STRING(this), locales, false);
-}
+var StringPrototypeMethods = {};
+DEFINE_METHODS_LEN(
+  GlobalString.prototype,
+  {
+    toLocaleLowerCase(locales) {
+      CHECK_OBJECT_COERCIBLE(this, "String.prototype.toLocaleLowerCase");
+      return LocaleConvertCase(TO_STRING(this), locales, false);
+    }
 
-%FunctionSetLength(ToLocaleLowerCaseIntl, 0);
-
-function ToLocaleUpperCaseIntl(locales) {
-  CHECK_OBJECT_COERCIBLE(this, "String.prototype.toLocaleUpperCase");
-  return LocaleConvertCase(TO_STRING(this), locales, true);
-}
-
-%FunctionSetLength(ToLocaleUpperCaseIntl, 0);
+    toLocaleUpperCase(locales) {
+      CHECK_OBJECT_COERCIBLE(this, "String.prototype.toLocaleUpperCase");
+      return LocaleConvertCase(TO_STRING(this), locales, true);
+    }
+  },
+  0  /* Set function length of both methods. */
+);
 
 
 /**
  * Formats a Number object (this) using locale and options values.
  * If locale or options are omitted, defaults are used.
  */
-OverrideFunction(GlobalNumber.prototype, 'toLocaleString', function() {
+DEFINE_METHOD(
+  GlobalNumber.prototype,
+  toLocaleString() {
     if (!(this instanceof GlobalNumber) && typeof(this) !== 'number') {
       throw %make_type_error(kMethodInvokedOnWrongType, "Number");
     }
@@ -2081,7 +2051,9 @@ function toLocaleDateTime(date, locales, options, required, defaults, service) {
  * If locale or options are omitted, defaults are used - both date and time are
  * present in the output.
  */
-OverrideFunction(GlobalDate.prototype, 'toLocaleString', function() {
+DEFINE_METHOD(
+  GlobalDate.prototype,
+  toLocaleString() {
     var locales = arguments[0];
     var options = arguments[1];
     return toLocaleDateTime(
@@ -2095,7 +2067,9 @@ OverrideFunction(GlobalDate.prototype, 'toLocaleString', function() {
  * If locale or options are omitted, defaults are used - only date is present
  * in the output.
  */
-OverrideFunction(GlobalDate.prototype, 'toLocaleDateString', function() {
+DEFINE_METHOD(
+  GlobalDate.prototype,
+  toLocaleDateString() {
     var locales = arguments[0];
     var options = arguments[1];
     return toLocaleDateTime(
@@ -2109,23 +2083,14 @@ OverrideFunction(GlobalDate.prototype, 'toLocaleDateString', function() {
  * If locale or options are omitted, defaults are used - only time is present
  * in the output.
  */
-OverrideFunction(GlobalDate.prototype, 'toLocaleTimeString', function() {
+DEFINE_METHOD(
+  GlobalDate.prototype,
+  toLocaleTimeString() {
     var locales = arguments[0];
     var options = arguments[1];
     return toLocaleDateTime(
         this, locales, options, 'time', 'time', 'dateformattime');
   }
 );
-
-%FunctionRemovePrototype(ToLocaleLowerCaseIntl);
-%FunctionRemovePrototype(ToLocaleUpperCaseIntl);
-
-utils.SetFunctionName(ToLocaleLowerCaseIntl, "toLocaleLowerCase");
-utils.SetFunctionName(ToLocaleUpperCaseIntl, "toLocaleUpperCase");
-
-utils.Export(function(to) {
-  to.ToLocaleLowerCaseIntl = ToLocaleLowerCaseIntl;
-  to.ToLocaleUpperCaseIntl = ToLocaleUpperCaseIntl;
-});
 
 })

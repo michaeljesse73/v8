@@ -5,9 +5,12 @@
 #ifndef V8_PARSING_PARSE_INFO_H_
 #define V8_PARSING_PARSE_INFO_H_
 
+#include <map>
 #include <memory>
+#include <vector>
 
 #include "include/v8.h"
+#include "src/compiler-dispatcher/compiler-dispatcher-job.h"
 #include "src/globals.h"
 #include "src/handles.h"
 #include "src/parsing/preparsed-scope-data.h"
@@ -33,7 +36,7 @@ class Utf16CharacterStream;
 class Zone;
 
 // A container for the inputs, configuration options, and outputs of parsing.
-class V8_EXPORT_PRIVATE ParseInfo {
+class V8_EXPORT_PRIVATE ParseInfo : public CompileJobFinishCallback {
  public:
   explicit ParseInfo(AccountingAllocator* zone_allocator);
   ParseInfo(Handle<Script> script);
@@ -116,7 +119,9 @@ class V8_EXPORT_PRIVATE ParseInfo {
   ScriptData** cached_data() const { return cached_data_; }
   void set_cached_data(ScriptData** cached_data) { cached_data_ = cached_data; }
 
-  PreParsedScopeData* preparsed_scope_data() { return &preparsed_scope_data_; }
+  ConsumedPreParsedScopeData* consumed_preparsed_scope_data() {
+    return &consumed_preparsed_scope_data_;
+  }
 
   ScriptCompiler::CompileOptions compile_options() const {
     return compile_options_;
@@ -243,6 +248,13 @@ class V8_EXPORT_PRIVATE ParseInfo {
     }
   }
 
+  void UpdateStatisticsAfterBackgroundParse(Isolate* isolate);
+
+  // The key of the map is the FunctionLiteral's start_position
+  std::map<int, ParseInfo*> child_infos() const;
+
+  void ParseFinished(std::unique_ptr<ParseInfo> info) override;
+
 #ifdef DEBUG
   bool script_is_native() const;
 #endif  // DEBUG
@@ -293,7 +305,7 @@ class V8_EXPORT_PRIVATE ParseInfo {
 
   //----------- Inputs+Outputs of parsing and scope analysis -----------------
   ScriptData** cached_data_;  // used if available, populated if requested.
-  PreParsedScopeData preparsed_scope_data_;
+  ConsumedPreParsedScopeData consumed_preparsed_scope_data_;
   AstValueFactory* ast_value_factory_;  // used if available, otherwise new.
   const class AstStringConstants* ast_string_constants_;
   const AstRawString* function_name_;
@@ -302,6 +314,9 @@ class V8_EXPORT_PRIVATE ParseInfo {
   //----------- Output of parsing and scope analysis ------------------------
   FunctionLiteral* literal_;
   std::shared_ptr<DeferredHandles> deferred_handles_;
+
+  std::vector<std::unique_ptr<ParseInfo>> child_infos_;
+  mutable base::Mutex child_infos_mutex_;
 
   void SetFlag(Flag f) { flags_ |= f; }
   void SetFlag(Flag f, bool v) { flags_ = v ? flags_ | f : flags_ & ~f; }

@@ -696,8 +696,8 @@ class SideTable : public ZoneObject {
       };
       const byte* target;
       uint32_t target_stack_height;
+      // Arity when branching to this label.
       const uint32_t arity;
-      // TODO(clemensh): Fix ZoneAllocator and make this ZoneVector<const Ref>.
       ZoneVector<Ref> refs;
 
       static CLabel* New(Zone* zone, uint32_t stack_height, uint32_t arity) {
@@ -740,6 +740,21 @@ class SideTable : public ZoneObject {
       const byte* pc;
       CLabel* end_label;
       CLabel* else_label;
+      // Arity (number of values on the stack) when exiting this control
+      // structure via |end|.
+      uint32_t exit_arity;
+      // Track whether this block was already left, i.e. all further
+      // instructions are unreachable.
+      bool unreachable = false;
+
+      Control(const byte* pc, CLabel* end_label, CLabel* else_label,
+              uint32_t exit_arity)
+          : pc(pc),
+            end_label(end_label),
+            else_label(else_label),
+            exit_arity(exit_arity) {}
+      Control(const byte* pc, CLabel* end_label, uint32_t exit_arity)
+          : Control(pc, end_label, nullptr, exit_arity) {}
 
       void Finish(ControlTransferMap* map, const byte* start) {
         end_label->Finish(map, start);
@@ -758,35 +773,45 @@ class SideTable : public ZoneObject {
         static_cast<uint32_t>(code->function->sig->return_count());
     CLabel* func_label =
         CLabel::New(&control_transfer_zone, stack_height, func_arity);
-    control_stack.push_back({code->orig_start, func_label, nullptr});
+    control_stack.emplace_back(code->orig_start, func_label, func_arity);
+    auto control_parent = [&]() -> Control& {
+      DCHECK_LE(2, control_stack.size());
+      return control_stack[control_stack.size() - 2];
+    };
+    auto copy_unreachable = [&] {
+      control_stack.back().unreachable = control_parent().unreachable;
+    };
     for (BytecodeIterator i(code->orig_start, code->orig_end, &code->locals);
          i.has_next(); i.next()) {
       WasmOpcode opcode = i.current();
-      auto stack_effect =
-          StackEffect(module, code->function->sig, i.pc(), i.end());
-      TRACE("@%u: control %s (sp %d - %d + %d)\n", i.pc_offset(),
-            WasmOpcodes::OpcodeName(opcode), stack_height, stack_effect.first,
-            stack_effect.second);
-      DCHECK_GE(stack_height, stack_effect.first);
-      DCHECK_GE(kMaxUInt32, static_cast<uint64_t>(stack_height) -
-                                stack_effect.first + stack_effect.second);
-      stack_height = stack_height - stack_effect.first + stack_effect.second;
-      if (stack_height > max_stack_height_) max_stack_height_ = stack_height;
+      bool unreachable = control_stack.back().unreachable;
+      if (unreachable) {
+        TRACE("@%u: %s (is unreachable)\n", i.pc_offset(),
+              WasmOpcodes::OpcodeName(opcode));
+      } else {
+        auto stack_effect =
+            StackEffect(module, code->function->sig, i.pc(), i.end());
+        TRACE("@%u: %s (sp %d - %d + %d)\n", i.pc_offset(),
+              WasmOpcodes::OpcodeName(opcode), stack_height, stack_effect.first,
+              stack_effect.second);
+        DCHECK_GE(stack_height, stack_effect.first);
+        DCHECK_GE(kMaxUInt32, static_cast<uint64_t>(stack_height) -
+                                  stack_effect.first + stack_effect.second);
+        stack_height = stack_height - stack_effect.first + stack_effect.second;
+        if (stack_height > max_stack_height_) max_stack_height_ = stack_height;
+      }
       switch (opcode) {
-        case kExprBlock: {
-          BlockTypeOperand<false> operand(&i, i.pc());
-          TRACE("control @%u: Block, arity %d\n", i.pc_offset(), operand.arity);
-          CLabel* label =
-              CLabel::New(&control_transfer_zone, stack_height, operand.arity);
-          control_stack.push_back({i.pc(), label, nullptr});
-          break;
-        }
+        case kExprBlock:
         case kExprLoop: {
-          TRACE("control @%u: Loop\n", i.pc_offset());
-          // Arity is always 0 for loop labels.
-          CLabel* label = CLabel::New(&control_transfer_zone, stack_height, 0);
-          control_stack.push_back({i.pc(), label, nullptr});
-          label->Bind(i.pc());
+          bool is_loop = opcode == kExprLoop;
+          BlockTypeOperand<false> operand(&i, i.pc());
+          TRACE("control @%u: %s, arity %d\n", i.pc_offset(),
+                is_loop ? "Loop" : "Block", operand.arity);
+          CLabel* label = CLabel::New(&control_transfer_zone, stack_height,
+                                      is_loop ? 0 : operand.arity);
+          control_stack.emplace_back(i.pc(), label, operand.arity);
+          copy_unreachable();
+          if (is_loop) label->Bind(i.pc());
           break;
         }
         case kExprIf: {
@@ -796,14 +821,19 @@ class SideTable : public ZoneObject {
               CLabel::New(&control_transfer_zone, stack_height, operand.arity);
           CLabel* else_label =
               CLabel::New(&control_transfer_zone, stack_height, 0);
-          control_stack.push_back({i.pc(), end_label, else_label});
-          else_label->Ref(i.pc(), stack_height);
+          control_stack.emplace_back(i.pc(), end_label, else_label,
+                                     operand.arity);
+          copy_unreachable();
+          if (!unreachable) else_label->Ref(i.pc(), stack_height);
           break;
         }
         case kExprElse: {
           Control* c = &control_stack.back();
+          copy_unreachable();
           TRACE("control @%u: Else\n", i.pc_offset());
-          c->end_label->Ref(i.pc(), stack_height);
+          if (!control_parent().unreachable) {
+            c->end_label->Ref(i.pc(), stack_height);
+          }
           DCHECK_NOT_NULL(c->else_label);
           c->else_label->Bind(i.pc() + 1);
           c->else_label->Finish(&map_, code->orig_start);
@@ -823,8 +853,7 @@ class SideTable : public ZoneObject {
           }
           c->Finish(&map_, code->orig_start);
           DCHECK_GE(stack_height, c->end_label->target_stack_height);
-          stack_height =
-              c->end_label->target_stack_height + c->end_label->arity;
+          stack_height = c->end_label->target_stack_height + c->exit_arity;
           control_stack.pop_back();
           break;
         }
@@ -832,14 +861,14 @@ class SideTable : public ZoneObject {
           BreakDepthOperand<false> operand(&i, i.pc());
           TRACE("control @%u: Br[depth=%u]\n", i.pc_offset(), operand.depth);
           Control* c = &control_stack[control_stack.size() - operand.depth - 1];
-          c->end_label->Ref(i.pc(), stack_height);
+          if (!unreachable) c->end_label->Ref(i.pc(), stack_height);
           break;
         }
         case kExprBrIf: {
           BreakDepthOperand<false> operand(&i, i.pc());
           TRACE("control @%u: BrIf[depth=%u]\n", i.pc_offset(), operand.depth);
           Control* c = &control_stack[control_stack.size() - operand.depth - 1];
-          c->end_label->Ref(i.pc(), stack_height);
+          if (!unreachable) c->end_label->Ref(i.pc(), stack_height);
           break;
         }
         case kExprBrTable: {
@@ -847,17 +876,21 @@ class SideTable : public ZoneObject {
           BranchTableIterator<false> iterator(&i, operand);
           TRACE("control @%u: BrTable[count=%u]\n", i.pc_offset(),
                 operand.table_count);
-          while (iterator.has_next()) {
-            uint32_t j = iterator.cur_index();
-            uint32_t target = iterator.next();
-            Control* c = &control_stack[control_stack.size() - target - 1];
-            c->end_label->Ref(i.pc() + j, stack_height);
+          if (!unreachable) {
+            while (iterator.has_next()) {
+              uint32_t j = iterator.cur_index();
+              uint32_t target = iterator.next();
+              Control* c = &control_stack[control_stack.size() - target - 1];
+              c->end_label->Ref(i.pc() + j, stack_height);
+            }
           }
           break;
         }
-        default: {
+        default:
           break;
-        }
+      }
+      if (WasmOpcodes::IsUnconditionalJump(opcode)) {
+        control_stack.back().unreachable = true;
       }
     }
     DCHECK_EQ(0, control_stack.size());
@@ -922,12 +955,11 @@ class CodeMap {
     interpreter_code_.reserve(module->functions.size());
     for (const WasmFunction& function : module->functions) {
       if (function.imported) {
-        DCHECK_EQ(function.code_start_offset, function.code_end_offset);
+        DCHECK(!function.code.is_set());
         AddFunction(&function, nullptr, nullptr);
       } else {
-        const byte* code_start = module_start + function.code_start_offset;
-        const byte* code_end = module_start + function.code_end_offset;
-        AddFunction(&function, code_start, code_end);
+        AddFunction(&function, module_start + function.code.offset(),
+                    module_start + function.code.end_offset());
       }
     }
   }
@@ -1045,7 +1077,7 @@ class CodeMap {
         imported_functions_ =
             isolate->global_handles()->Create(*new_imported_functions);
       }
-      int this_idx = Smi::cast(imported_functions_->get(0))->value() + 1;
+      int this_idx = Smi::ToInt(imported_functions_->get(0)) + 1;
       if (this_idx == imported_functions_->length()) {
         Handle<FixedArray> new_imported_functions =
             isolate->factory()->CopyFixedArrayAndGrow(imported_functions_,
@@ -1071,7 +1103,6 @@ Handle<Object> WasmValToNumber(Factory* factory, WasmVal val,
     case kWasmI64:
       // wasm->js and js->wasm is illegal for i64 type.
       UNREACHABLE();
-      return Handle<Object>::null();
     case kWasmF32:
       return factory->NewNumber(val.to<float>());
     case kWasmF64:
@@ -1386,7 +1417,6 @@ class ThreadImpl {
       }
       default:
         UNREACHABLE();
-        return 0;
     }
   }
 
@@ -2054,14 +2084,6 @@ class ThreadImpl {
 
   sp_t StackHeight() { return sp_ - stack_start_; }
 
-  void TraceStack(const char* phase, pc_t pc) {
-    if (FLAG_trace_wasm_interpreter) {
-      PrintF("%s @%zu", phase, pc);
-      UNIMPLEMENTED();
-      PrintF("\n");
-    }
-  }
-
   void TraceValueStack() {
 #ifdef DEBUG
     if (!FLAG_trace_wasm_interpreter) return;
@@ -2122,7 +2144,7 @@ class ThreadImpl {
         // TODO(wasm): Implement calling functions of other instances/modules.
         UNIMPLEMENTED();
       }
-      int target_func_idx = Smi::cast(deopt_data->get(1))->value();
+      int target_func_idx = Smi::ToInt(deopt_data->get(1));
       DCHECK_LE(0, target_func_idx);
       return {ExternalCallResult::INTERNAL,
               codemap()->GetCode(target_func_idx)};
@@ -2242,8 +2264,7 @@ class ThreadImpl {
       if (entry_index >= static_cast<uint32_t>(sig_table->length())) {
         return {ExternalCallResult::INVALID_FUNC};
       }
-      int found_sig =
-          Smi::cast(sig_table->get(static_cast<int>(entry_index)))->value();
+      int found_sig = Smi::ToInt(sig_table->get(static_cast<int>(entry_index)));
       if (static_cast<uint32_t>(found_sig) != canonical_sig_index) {
         return {ExternalCallResult::SIGNATURE_MISMATCH};
       }
@@ -2537,7 +2558,7 @@ ControlTransferMap WasmInterpreter::ComputeControlTransfersForTesting(
   // Create some dummy structures, to avoid special-casing the implementation
   // just for testing.
   FunctionSig sig(0, 0, nullptr);
-  WasmFunction function{&sig, 0, 0, 0, 0, 0, 0, false, false};
+  WasmFunction function{&sig, 0, 0, {0, 0}, {0, 0}, false, false};
   InterpreterCode code{
       &function, BodyLocalDecls(zone), start, end, nullptr, nullptr, nullptr};
 
