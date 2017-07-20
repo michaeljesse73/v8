@@ -87,10 +87,7 @@ class Node;
 
 // List of code stubs only used on ARM 64 bits platforms.
 #if V8_TARGET_ARCH_ARM64
-#define CODE_STUB_LIST_ARM64(V) \
-  V(DirectCEntry)               \
-  V(RestoreRegistersState)      \
-  V(StoreRegistersState)
+#define CODE_STUB_LIST_ARM64(V) V(DirectCEntry)
 
 #else
 #define CODE_STUB_LIST_ARM64(V)
@@ -514,8 +511,6 @@ class RuntimeCallHelper {
 #include "src/mips64/code-stubs-mips64.h"
 #elif V8_TARGET_ARCH_S390
 #include "src/s390/code-stubs-s390.h"
-#elif V8_TARGET_ARCH_X87
-#include "src/x87/code-stubs-x87.h"
 #else
 #error Unsupported target architecture.
 #endif
@@ -732,23 +727,17 @@ class MathPowStub: public PlatformCodeStub {
 
 class CallICStub : public TurboFanCodeStub {
  public:
-  CallICStub(Isolate* isolate, ConvertReceiverMode convert_mode,
-             TailCallMode tail_call_mode)
+  CallICStub(Isolate* isolate, ConvertReceiverMode convert_mode)
       : TurboFanCodeStub(isolate) {
-    minor_key_ = ConvertModeBits::encode(convert_mode) |
-                 TailCallModeBits::encode(tail_call_mode);
+    minor_key_ = ConvertModeBits::encode(convert_mode);
   }
 
   ConvertReceiverMode convert_mode() const {
     return ConvertModeBits::decode(minor_key_);
   }
-  TailCallMode tail_call_mode() const {
-    return TailCallModeBits::decode(minor_key_);
-  }
 
  protected:
   typedef BitField<ConvertReceiverMode, 0, 2> ConvertModeBits;
-  typedef BitField<TailCallMode, ConvertModeBits::kNext, 1> TailCallModeBits;
 
  private:
   void PrintState(std::ostream& os) const final;  // NOLINT
@@ -1090,9 +1079,8 @@ class StringCharCodeAtGenerator {
 
 class CallICTrampolineStub : public CallICStub {
  public:
-  CallICTrampolineStub(Isolate* isolate, ConvertReceiverMode convert_mode,
-                       TailCallMode tail_call_mode)
-      : CallICStub(isolate, convert_mode, tail_call_mode) {}
+  CallICTrampolineStub(Isolate* isolate, ConvertReceiverMode convert_mode)
+      : CallICStub(isolate, convert_mode) {}
 
   DEFINE_CALL_INTERFACE_DESCRIPTOR(CallICTrampoline);
   DEFINE_TURBOFAN_CODE_STUB(CallICTrampoline, CallICStub);

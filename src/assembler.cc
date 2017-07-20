@@ -85,8 +85,6 @@
 #include "src/regexp/mips64/regexp-macro-assembler-mips64.h"  // NOLINT
 #elif V8_TARGET_ARCH_S390
 #include "src/regexp/s390/regexp-macro-assembler-s390.h"  // NOLINT
-#elif V8_TARGET_ARCH_X87
-#include "src/regexp/x87/regexp-macro-assembler-x87.h"  // NOLINT
 #else  // Unknown architecture.
 #error "Unknown architecture."
 #endif  // Target architecture.
@@ -145,8 +143,7 @@ const char* const RelocInfo::kFillerCommentString = "DEOPTIMIZATION PADDING";
 // Implementation of AssemblerBase
 
 AssemblerBase::IsolateData::IsolateData(Isolate* isolate)
-    : serializer_enabled_(isolate->serializer_enabled()),
-      max_old_generation_size_(isolate->heap()->MaxOldGenerationSize())
+    : serializer_enabled_(isolate->serializer_enabled())
 #if V8_TARGET_ARCH_X64
       ,
       code_range_start_(
@@ -1325,8 +1322,6 @@ ExternalReference ExternalReference::re_check_stack_guard_state(
   function = FUNCTION_ADDR(RegExpMacroAssemblerMIPS::CheckStackGuardState);
 #elif V8_TARGET_ARCH_S390
   function = FUNCTION_ADDR(RegExpMacroAssemblerS390::CheckStackGuardState);
-#elif V8_TARGET_ARCH_X87
-  function = FUNCTION_ADDR(RegExpMacroAssemblerX87::CheckStackGuardState);
 #else
   UNREACHABLE();
 #endif
@@ -1572,11 +1567,6 @@ ExternalReference ExternalReference::ForDeoptEntry(Address entry) {
 ExternalReference ExternalReference::cpu_features() {
   DCHECK(CpuFeatures::initialized_);
   return ExternalReference(&CpuFeatures::supported_);
-}
-
-ExternalReference ExternalReference::is_tail_call_elimination_enabled_address(
-    Isolate* isolate) {
-  return ExternalReference(isolate->is_tail_call_elimination_enabled_address());
 }
 
 ExternalReference ExternalReference::promise_hook_or_debug_is_active_address(
@@ -1949,7 +1939,7 @@ void Assembler::RecordDebugBreakSlot(RelocInfo::Mode mode) {
 
 
 void Assembler::DataAlign(int m) {
-  DCHECK(m >= 2 && base::bits::IsPowerOfTwo32(m));
+  DCHECK(m >= 2 && base::bits::IsPowerOfTwo(m));
   while ((pc_offset() & (m - 1)) != 0) {
     db(0);
   }

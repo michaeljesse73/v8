@@ -49,8 +49,6 @@ const Register StoreTransitionDescriptor::MapRegister() { return r5; }
 const Register StringCompareDescriptor::LeftRegister() { return r1; }
 const Register StringCompareDescriptor::RightRegister() { return r0; }
 
-const Register StringConcatDescriptor::ArgumentsCountRegister() { return r0; }
-
 const Register ApiGetterDescriptor::HolderRegister() { return r0; }
 const Register ApiGetterDescriptor::CallbackRegister() { return r3; }
 
@@ -437,8 +435,7 @@ void ResumeGeneratorDescriptor::InitializePlatformSpecific(
   Register registers[] = {
       r0,  // the value to pass to the generator
       r1,  // the JSGeneratorObject to resume
-      r2,  // the resume mode (tagged)
-      r3,  // SuspendFlags (tagged)
+      r2   // the resume mode (tagged)
   };
   data->InitializePlatformSpecific(arraysize(registers), registers);
 }

@@ -26,12 +26,12 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Flags: --allow-natives-syntax --expose-gc
-// Flags: --opt --no-always-opt
+// Flags: --opt --no-always-opt --no-stress-fullcodegen
 
 var elements_kind = {
-  fast_smi_only            :  'fast smi only elements',
-  fast                     :  'fast elements',
-  fast_double              :  'fast double elements',
+  packed_smi               :  'packed smi elements',
+  packed                   :  'packed elements',
+  packed_double            :  'packed double elements',
   dictionary               :  'dictionary elements',
   external_byte            :  'external byte elements',
   external_unsigned_byte   :  'external unsigned byte elements',
@@ -45,9 +45,9 @@ var elements_kind = {
 }
 
 function getKind(obj) {
-  if (%HasSmiElements(obj)) return elements_kind.fast_smi_only;
-  if (%HasObjectElements(obj)) return elements_kind.fast;
-  if (%HasDoubleElements(obj)) return elements_kind.fast_double;
+  if (%HasSmiElements(obj)) return elements_kind.packed_smi;
+  if (%HasObjectElements(obj)) return elements_kind.packed;
+  if (%HasDoubleElements(obj)) return elements_kind.packed_double;
   if (%HasDictionaryElements(obj)) return elements_kind.dictionary;
 }
 
@@ -93,26 +93,142 @@ assertOptimized(get_literal);
 
 
 // Test: make sure allocation site information is updated through a
-// transition from SMI->DOUBLE->FAST
+// transition from SMI->DOUBLE->PACKED
 (function() {
   function bar(a, b, c) {
     return [a, b, c];
   }
 
-  var a = bar(1, 2, 3);
-  assertKind(elements_kind.fast_smi_only, a);
+  a = bar(1, 2, 3);
   a[0] = 3.5;
   a[1] = 'hi';
-  assertKind(elements_kind.fast, a);
+  b = bar(1, 2, 3);
+  assertKind(elements_kind.packed, b);
+})();
 
-  // We only start tracking transition information with the second
-  // instantiation.
-  var b = bar(1, 2, 3);
-  assertKind(elements_kind.fast_smi_only, b);
-  b[0] = 3.5;
-  b[1] = 'hi';
-  assertKind(elements_kind.fast, b);
 
-  var c = bar(1, 2, 3);
-  assertKind(elements_kind.fast, c);
+(function changeOptimizedEmptyArrayKind() {
+  function f() {
+    return new Array();
+  }
+  var a = f();
+  assertKind('packed smi elements', a);
+  a = f();
+  assertKind('packed smi elements', a);
+  a = f();
+  a.push(0.5);
+  assertKind('packed double elements', a);
+  %OptimizeFunctionOnNextCall(f);
+  a = f();
+  assertKind('packed double elements', a);
+})();
+
+(function changeOptimizedArrayLiteralKind() {
+  function f() {
+    return [1, 2];
+  }
+  var a = f();
+  assertKind('packed smi elements', a);
+
+  a = f();
+  a.push(0.5);
+  assertKind('packed double elements', a);
+
+  a = f();
+  assertKind('packed double elements', a);
+  assertFalse(isHoley(a));
+
+  a = f();
+  a.push(undefined);
+  assertKind('packed elements', a);
+  assertFalse(isHoley(a));
+
+  a = f();
+  assertKind('packed elements', a);
+  assertFalse(isHoley(a));
+
+  %OptimizeFunctionOnNextCall(f);
+
+  a = f();
+  assertKind('packed elements', a);
+  assertFalse(isHoley(a));
+
+  a = f();
+  assertKind('packed elements', a);
+  assertFalse(isHoley(a));
+})();
+
+(function changeOptimizedEmptyArrayLiteralKind() {
+  function f() {
+    return [];
+  }
+  var a = f();
+  assertKind('packed smi elements', a);
+  assertFalse(isHoley(a));
+
+  a = f();
+  a.push(0.5);
+  assertKind('packed double elements', a);
+  assertFalse(isHoley(a));
+
+  a = f();
+  assertKind('packed double elements', a);
+  assertFalse(isHoley(a));
+
+  %OptimizeFunctionOnNextCall(f);
+
+  a = f();
+  assertKind('packed double elements', a);
+  assertFalse(isHoley(a));
+
+  a = f();
+  assertKind('packed double elements', a);
+  assertFalse(isHoley(a));
+})();
+
+(function changeEmptyArrayLiteralKind2() {
+  function f() {
+    var literal = [];
+    %HeapObjectVerify(literal);
+    return literal;
+  }
+  var a = f();
+  assertKind('packed smi elements', a);
+  assertFalse(isHoley(a));
+
+  a = f();
+  a.push(0.5);
+  assertKind('packed double elements', a);
+  assertFalse(isHoley(a));
+
+  a = f();
+  assertKind('packed double elements', a);
+  assertFalse(isHoley(a));
+
+  a = f();
+  a.push(undefined);
+  assertKind('packed elements', a);
+  assertFalse(isHoley(a));
+
+  a = f();
+  assertKind('packed elements', a);
+  assertFalse(isHoley(a));
+
+  a = f();
+  a[10] = 1;
+  assertKind('packed elements', a);
+  assertTrue(isHoley(a));
+
+  a = f();
+  assertKind('packed elements', a);
+  assertTrue(isHoley(a));
+
+  a = f();
+  a[10000] = 1;
+  assertKind('dictionary elements', a);
+  assertFalse(isHoley(a));
+
+  a = f();
+  assertKind('packed elements', a);
+  assertTrue(isHoley(a));
 })();

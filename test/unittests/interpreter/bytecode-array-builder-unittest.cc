@@ -155,7 +155,6 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
       .CallUndefinedReceiver(reg, empty, 1)
       .CallUndefinedReceiver(reg, single, 1)
       .CallUndefinedReceiver(reg, pair, 1)
-      .TailCall(reg, reg_list, 1)
       .CallRuntime(Runtime::kIsArray, reg)
       .CallRuntimeForPair(Runtime::kLoadLookupSlotForCall, reg_list, pair)
       .CallJSRuntime(Context::SPREAD_ITERABLE_INDEX, reg_list)
@@ -190,9 +189,6 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
       .BinaryOperationSmiLiteral(Token::Value::SHL, Smi::FromInt(42), 2)
       .BinaryOperationSmiLiteral(Token::Value::SAR, Smi::FromInt(42), 2)
       .BinaryOperationSmiLiteral(Token::Value::SHR, Smi::FromInt(42), 2);
-
-  // Emit StringConcat operations.
-  builder.ToPrimitiveToString(reg, 1).StringConcat(pair);
 
   // Emit count operatior invocations
   builder.CountOperation(Token::Value::ADD, 1)
@@ -355,6 +351,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
   builder
       .CreateRegExpLiteral(ast_factory.GetOneByteString("wide_literal"), 0, 0)
       .CreateArrayLiteral(0, 0, 0)
+      .CreateEmptyArrayLiteral(0)
       .CreateObjectLiteral(0, 0, 0, reg);
 
   // Emit load and store operations for module variables.
@@ -366,7 +363,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
       .StoreModuleVariable(1, 42);
 
   // Emit generator operations.
-  builder.SuspendGenerator(reg, reg_list, SuspendFlags::kYield)
+  builder.SuspendGenerator(reg, reg_list)
       .RestoreGeneratorState(reg)
       .RestoreGeneratorRegisters(reg, reg_list);
 
@@ -421,9 +418,6 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
 
   // Insert entry for illegal bytecode as this is never willingly emitted.
   scorecard[Bytecodes::ToByte(Bytecode::kIllegal)] = 1;
-
-  // Insert entry for nop bytecode as this often gets optimized out.
-  scorecard[Bytecodes::ToByte(Bytecode::kNop)] = 1;
 
   if (!FLAG_type_profile) {
     // Bytecode for CollectTypeProfile is only emitted when

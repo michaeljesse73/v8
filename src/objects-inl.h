@@ -150,9 +150,8 @@ bool HeapObject::IsJSGeneratorObject() const {
 
 bool HeapObject::IsBoilerplateDescription() const { return IsFixedArray(); }
 
-// External objects are not extensible, so the map check is enough.
 bool HeapObject::IsExternal() const {
-  return map() == GetHeap()->external_map();
+  return map()->FindRootMap() == GetHeap()->external_map();
 }
 
 #define IS_TYPE_FUNCTION_DEF(type_)                               \
@@ -1088,17 +1087,7 @@ inline Object* OrderedHashMap::ValueAt(int entry) {
   return get(EntryToIndex(entry) + kValueOffset);
 }
 
-void JSReceiver::set_properties(Object* value, WriteBarrierMode mode) {
-  Heap* heap = GetHeap();
-  DCHECK_NE(value, heap->empty_property_array());
-
-  WRITE_FIELD(this, kPropertiesOffset, value);
-  CONDITIONAL_WRITE_BARRIER(heap, this, kPropertiesOffset, value, mode);
-}
-
-Object* JSReceiver::properties() const {
-  return Object::cast(READ_FIELD(this, kPropertiesOffset));
-}
+ACCESSORS(JSReceiver, raw_properties_or_hash, Object, kPropertiesOrHashOffset)
 
 Object** FixedArray::GetFirstElementAddress() {
   return reinterpret_cast<Object**>(FIELD_ADDR(this, OffsetOfElementAt(0)));
@@ -3194,6 +3183,11 @@ Handle<Map> Map::AddMissingTransitionsForTesting(
   return AddMissingTransitions(split_map, descriptors, full_layout_descriptor);
 }
 
+void Map::InsertElementsKindTransitionShortcutForTesting(
+    Isolate* isolate, Handle<Map> map, Handle<Map> transition) {
+  Map::InsertElementsKindTransitionShortcut(isolate, map, transition);
+}
+
 int HeapObject::SizeFromMap(Map* map) const {
   int instance_size = map->instance_size();
   if (instance_size != kVariableSizeSentinel) return instance_size;
@@ -4432,6 +4426,9 @@ ACCESSORS(ContextExtension, extension, Object, kExtensionOffset)
 SMI_ACCESSORS(ConstantElementsPair, elements_kind, kElementsKindOffset)
 ACCESSORS(ConstantElementsPair, constant_values, FixedArrayBase,
           kConstantValuesOffset)
+bool ConstantElementsPair::is_empty() const {
+  return constant_values()->length() == 0;
+}
 
 ACCESSORS(JSModuleNamespace, module, Module, kModuleOffset)
 
@@ -4856,25 +4853,8 @@ ACCESSORS(JSProxy, hash, Object, kHashOffset)
 bool JSProxy::IsRevoked() const { return !handler()->IsJSReceiver(); }
 
 ACCESSORS(JSCollection, table, Object, kTableOffset)
-
-
-#define ORDERED_HASH_TABLE_ITERATOR_ACCESSORS(name, type, offset)    \
-  template<class Derived, class TableType>                           \
-  type* OrderedHashTableIterator<Derived, TableType>::name() const { \
-    return type::cast(READ_FIELD(this, offset));                     \
-  }                                                                  \
-  template<class Derived, class TableType>                           \
-  void OrderedHashTableIterator<Derived, TableType>::set_##name(     \
-      type* value, WriteBarrierMode mode) {                          \
-    WRITE_FIELD(this, offset, value);                                \
-    CONDITIONAL_WRITE_BARRIER(GetHeap(), this, offset, value, mode); \
-  }
-
-ORDERED_HASH_TABLE_ITERATOR_ACCESSORS(table, Object, kTableOffset)
-ORDERED_HASH_TABLE_ITERATOR_ACCESSORS(index, Object, kIndexOffset)
-
-#undef ORDERED_HASH_TABLE_ITERATOR_ACCESSORS
-
+ACCESSORS(JSCollectionIterator, table, Object, kTableOffset)
+ACCESSORS(JSCollectionIterator, index, Object, kIndexOffset)
 
 ACCESSORS(JSWeakCollection, table, Object, kTableOffset)
 ACCESSORS(JSWeakCollection, next, Object, kNextOffset)
@@ -4920,8 +4900,6 @@ bool JSGeneratorObject::is_executing() const {
 }
 
 ACCESSORS(JSAsyncGeneratorObject, queue, HeapObject, kQueueOffset)
-ACCESSORS(JSAsyncGeneratorObject, await_input_or_debug_pos, Object,
-          kAwaitInputOrDebugPosOffset)
 ACCESSORS(JSAsyncGeneratorObject, awaited_promise, HeapObject,
           kAwaitedPromiseOffset)
 
@@ -5493,13 +5471,13 @@ bool JSObject::HasIndexedInterceptor() {
 
 void JSGlobalObject::set_global_dictionary(GlobalDictionary* dictionary) {
   DCHECK(IsJSGlobalObject());
-  return set_properties(dictionary);
+  return SetProperties(dictionary);
 }
 
 GlobalDictionary* JSGlobalObject::global_dictionary() {
   DCHECK(!HasFastProperties());
   DCHECK(IsJSGlobalObject());
-  return GlobalDictionary::cast(properties());
+  return GlobalDictionary::cast(raw_properties_or_hash());
 }
 
 
@@ -5606,21 +5584,23 @@ void JSReceiver::initialize_properties() {
   DCHECK(!GetHeap()->InNewSpace(GetHeap()->empty_fixed_array()));
   DCHECK(!GetHeap()->InNewSpace(GetHeap()->empty_property_dictionary()));
   if (map()->is_dictionary_map()) {
-    WRITE_FIELD(this, kPropertiesOffset,
+    WRITE_FIELD(this, kPropertiesOrHashOffset,
                 GetHeap()->empty_property_dictionary());
   } else {
-    WRITE_FIELD(this, kPropertiesOffset, GetHeap()->empty_fixed_array());
+    WRITE_FIELD(this, kPropertiesOrHashOffset, GetHeap()->empty_fixed_array());
   }
 }
 
 bool JSReceiver::HasFastProperties() const {
-  DCHECK_EQ(properties()->IsDictionary(), map()->is_dictionary_map());
+  DCHECK_EQ(raw_properties_or_hash()->IsDictionary(),
+            map()->is_dictionary_map());
   return !map()->is_dictionary_map();
 }
 
 NameDictionary* JSReceiver::property_dictionary() const {
   DCHECK(!IsJSGlobalObject());
-  return NameDictionary::cast(properties());
+  DCHECK(!HasFastProperties());
+  return NameDictionary::cast(raw_properties_or_hash());
 }
 
 // TODO(gsathya): Pass isolate directly to this function and access
@@ -5628,12 +5608,17 @@ NameDictionary* JSReceiver::property_dictionary() const {
 PropertyArray* JSReceiver::property_array() const {
   DCHECK(HasFastProperties());
 
-  Object* prop = properties();
+  Object* prop = raw_properties_or_hash();
   if (prop->IsSmi() || prop == GetHeap()->empty_fixed_array()) {
     return GetHeap()->empty_property_array();
   }
 
   return PropertyArray::cast(prop);
+}
+
+void JSReceiver::SetProperties(HeapObject* properties) {
+  // TODO(gsathya): Update the hash code here.
+  set_raw_properties_or_hash(properties);
 }
 
 Maybe<bool> JSReceiver::HasProperty(Handle<JSReceiver> object,

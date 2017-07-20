@@ -72,8 +72,6 @@ Reduction JSNativeContextSpecialization::Reduce(Node* node) {
   switch (node->opcode()) {
     case IrOpcode::kJSAdd:
       return ReduceJSAdd(node);
-    case IrOpcode::kJSStringConcat:
-      return ReduceJSStringConcat(node);
     case IrOpcode::kJSGetSuperConstructor:
       return ReduceJSGetSuperConstructor(node);
     case IrOpcode::kJSInstanceOf:
@@ -128,59 +126,6 @@ Reduction JSNativeContextSpecialization::ReduceJSAdd(Node* node) {
     }
   }
   return NoChange();
-}
-
-Reduction JSNativeContextSpecialization::ReduceJSStringConcat(Node* node) {
-  // TODO(turbofan): This has to run together with the inlining and
-  // native context specialization to be able to leverage the string
-  // constant-folding for optimizing property access, but we should
-  // nevertheless find a better home for this at some point.
-  DCHECK_EQ(IrOpcode::kJSStringConcat, node->opcode());
-  Node* effect = NodeProperties::GetEffectInput(node);
-  Node* control = NodeProperties::GetControlInput(node);
-  DCHECK_GE(StringConcatParameterOf(node->op()).operand_count(), 3);
-
-  // Constant-fold string concatenation.
-  HeapObjectMatcher last_operand(NodeProperties::GetValueInput(node, 0));
-  int operand_count = StringConcatParameterOf(node->op()).operand_count();
-  for (int i = 1; i < operand_count; ++i) {
-    HeapObjectMatcher current_operand(NodeProperties::GetValueInput(node, i));
-
-    if (last_operand.HasValue() && current_operand.HasValue()) {
-      Handle<String> left = Handle<String>::cast(last_operand.Value());
-      Handle<String> right = Handle<String>::cast(current_operand.Value());
-      if (left->length() + right->length() <= String::kMaxLength) {
-        Handle<String> result =
-            factory()->NewConsString(left, right).ToHandleChecked();
-        Node* value = jsgraph()->HeapConstant(result);
-        node->ReplaceInput(i - 1, value);
-        node->RemoveInput(i);
-        last_operand = HeapObjectMatcher(value);
-        i--;
-        operand_count--;
-        continue;
-      }
-    }
-    last_operand = current_operand;
-  }
-
-  if (operand_count == StringConcatParameterOf(node->op()).operand_count()) {
-    return NoChange();
-  } else if (operand_count == 1) {
-    // Replace with input if there is only one input left.
-    Node* value = NodeProperties::GetValueInput(node, 0);
-    ReplaceWithValue(node, value, effect, control);
-    return Replace(value);
-  } else if (operand_count == 2) {
-    // Replace with JSAdd if we only have two operands left.
-    NodeProperties::ChangeOp(node,
-                             javascript()->Add(BinaryOperationHint::kString));
-    return Changed(node);
-  } else {
-    // Otherwise update operand count.
-    NodeProperties::ChangeOp(node, javascript()->StringConcat(operand_count));
-    return Changed(node);
-  }
 }
 
 Reduction JSNativeContextSpecialization::ReduceJSGetSuperConstructor(
@@ -2315,33 +2260,22 @@ Node* JSNativeContextSpecialization::BuildExtendPropertiesBackingStore(
 
 bool JSNativeContextSpecialization::CanTreatHoleAsUndefined(
     MapHandles const& receiver_maps) {
-  // Check if the array prototype chain is intact.
-  if (!isolate()->IsFastArrayConstructorPrototypeChainIntact()) return false;
-
-  // Make sure both the initial Array and Object prototypes are stable.
-  Handle<JSObject> initial_array_prototype(
-      native_context()->initial_array_prototype(), isolate());
-  Handle<JSObject> initial_object_prototype(
-      native_context()->initial_object_prototype(), isolate());
-  if (!initial_array_prototype->map()->is_stable() ||
-      !initial_object_prototype->map()->is_stable()) {
-    return false;
-  }
-
-  // Check if all {receiver_maps} either have the initial Array.prototype
-  // or the initial Object.prototype as their prototype, as those are
-  // guarded by the array protector cell.
-  for (Handle<Map> map : receiver_maps) {
-    if (map->prototype() != *initial_array_prototype &&
-        map->prototype() != *initial_object_prototype) {
+  // Check if all {receiver_maps} either have one of the initial Array.prototype
+  // or Object.prototype objects as their prototype (in any of the current
+  // native contexts, as the global Array protector works isolate-wide).
+  for (Handle<Map> receiver_map : receiver_maps) {
+    DisallowHeapAllocation no_gc;
+    Object* const receiver_prototype = receiver_map->prototype();
+    if (!isolate()->IsInAnyContext(receiver_prototype,
+                                   Context::INITIAL_ARRAY_PROTOTYPE_INDEX) &&
+        !isolate()->IsInAnyContext(receiver_prototype,
+                                   Context::INITIAL_OBJECT_PROTOTYPE_INDEX)) {
       return false;
     }
   }
 
-  // Install code dependencies on the prototype maps.
-  for (Handle<Map> map : receiver_maps) {
-    dependencies()->AssumePrototypeMapsStable(map, initial_object_prototype);
-  }
+  // Check if the array prototype chain is intact.
+  if (!isolate()->IsFastArrayConstructorPrototypeChainIntact()) return false;
 
   // Install code dependency on the array protector cell.
   dependencies()->AssumePropertyCell(factory()->array_protector());

@@ -42,7 +42,7 @@ newBenchmark("ProxyConstructorWithClass", {
 
 // ----------------------------------------------------------------------------
 
-var obj = {};
+let obj = {};
 
 newBenchmark("ProxyConstructorWithObject", {
   setup() { },
@@ -67,5 +67,128 @@ newBenchmark("ProxyConstructorWithProxy", {
   },
   teardown() {
     return (typeof result == 'function');
+  }
+});
+
+// ----------------------------------------------------------------------------
+
+const SOME_NUMBER = 42;
+const SOME_OTHER_NUMBER = 1337;
+const ITERATIONS = 1000;
+
+newBenchmark("CallProxyWithoutTrap", {
+  setup() {
+    const target = () => { return SOME_NUMBER; };
+    p = new Proxy(target, {});
+  },
+  run() {
+    for(var i = 0; i < ITERATIONS; i++) {
+      p();
+    }
+  },
+  teardown() {
+    return (result === SOME_NUMBER);
+  }
+});
+
+// ----------------------------------------------------------------------------
+
+newBenchmark("CallProxyWithTrap", {
+  setup() {
+    const target = () => { return SOME_NUMBER; };
+    p = new Proxy(target, {
+      apply: function(target, thisArg, argumentsList) {
+        return SOME_OTHER_NUMBER;
+      }
+    });
+  },
+  run() {
+    for(var i = 0; i < ITERATIONS; i++) {
+      p();
+    }
+  },
+  teardown() {
+    return (result === SOME_OTHER_NUMBER);
+  }
+});
+
+var instance;
+class MyClass {
+};
+
+// ----------------------------------------------------------------------------
+
+newBenchmark("ConstructProxyWithoutTrap", {
+  setup() {
+    p = new Proxy(MyClass, {});
+  },
+  run() {
+    for(var i = 0; i < ITERATIONS; i++) {
+      instance = new p();
+    }
+  },
+  teardown() {
+    return instance instanceof MyClass;
+  }
+});
+
+// ----------------------------------------------------------------------------
+
+newBenchmark("ConstructProxyWithTrap", {
+  setup() {
+    p = new Proxy(Object, {
+      construct: function(target, argumentsList, newTarget) {
+        return new MyClass;
+      }
+    });
+  },
+  run() {
+    for(var i = 0; i < ITERATIONS; i++) {
+      instance = new p();
+    }
+  },
+  teardown() {
+    return instance instanceof MyClass;
+  }
+});
+
+// ----------------------------------------------------------------------------
+
+obj = {
+  prop: SOME_NUMBER
+}
+let value;
+
+newBenchmark("GetPropertyOfProxyWithoutTrap", {
+  setup() {
+    p = new Proxy(obj, {});
+  },
+  run() {
+    for(var i = 0; i < ITERATIONS; i++) {
+      value = p.prop;
+    }
+  },
+  teardown() {
+    return value === SOME_NUMBER;
+  }
+});
+
+// ----------------------------------------------------------------------------
+
+newBenchmark("GetPropertyOfProxyWithTrap", {
+  setup() {
+    p = new Proxy(obj, {
+      get: function(target, propertyKey, receiver) {
+        return SOME_OTHER_NUMBER;
+      }
+    });
+  },
+  run() {
+    for(var i = 0; i < ITERATIONS; i++) {
+      value = p.prop;
+    }
+  },
+  teardown() {
+    return value === SOME_OTHER_NUMBER;
   }
 });

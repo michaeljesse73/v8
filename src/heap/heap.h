@@ -203,6 +203,7 @@ using v8::MemoryPressureLevel;
   V(FixedArray, materialized_objects, MaterializedObjects)                     \
   V(FixedArray, microtask_queue, MicrotaskQueue)                               \
   V(FixedArray, detached_contexts, DetachedContexts)                           \
+  V(HeapObject, retaining_path_targets, RetainingPathTargets)                  \
   V(ArrayList, retained_maps, RetainedMaps)                                    \
   V(WeakHashTable, weak_object_to_code_table, WeakObjectToCodeTable)           \
   /* weak_new_space_object_to_code_list is an array of weak cells, where */    \
@@ -573,9 +574,11 @@ class Heap {
   static const int kPointerMultiplier = i::kPointerSize / 4;
 #endif
 
-  // The new space size has to be a power of 2. Sizes are in MB.
-  static const int kMinSemiSpaceSize = 1 * kPointerMultiplier;
-  static const int kMaxSemiSpaceSize = 8 * kPointerMultiplier;
+  // Semi-space size needs to be a multiple of page size.
+  static const int kMinSemiSpaceSizeInKB =
+      1 * kPointerMultiplier * ((1 << kPageSizeBits) / KB);
+  static const int kMaxSemiSpaceSizeInKB =
+      16 * kPointerMultiplier * ((1 << kPageSizeBits) / KB);
 
   // The old space size has to be a multiple of Page::kPageSize.
   // Sizes are in MB.
@@ -780,7 +783,7 @@ class Heap {
   // If an object has an AllocationMemento trailing it, return it, otherwise
   // return NULL;
   template <FindMementoMode mode>
-  inline AllocationMemento* FindAllocationMemento(HeapObject* object);
+  inline AllocationMemento* FindAllocationMemento(Map* map, HeapObject* object);
 
   // Returns false if not able to reserve.
   bool ReserveSpace(Reservation* reservations, List<Address>* maps);
@@ -925,15 +928,22 @@ class Heap {
   // Initialization. ===========================================================
   // ===========================================================================
 
-  // Configure heap size in MB before setup. Return false if the heap has been
-  // set up already.
-  bool ConfigureHeap(size_t max_semi_space_size, size_t max_old_space_size,
-                     size_t code_range_size);
+  // Configure heap sizes
+  // max_semi_space_size_in_kb: maximum semi-space size in KB
+  // max_old_generation_size_in_mb: maximum old generation size in MB
+  // code_range_size_in_mb: code range size in MB
+  // Return false if the heap has been set up already.
+  bool ConfigureHeap(size_t max_semi_space_size_in_kb,
+                     size_t max_old_generation_size_in_mb,
+                     size_t code_range_size_in_mb);
   bool ConfigureHeapDefault();
 
   // Prepares the heap, setting up memory areas that are needed in the isolate
   // without actually creating any objects.
   bool SetUp();
+
+  // (Re-)Initialize hash seed from flag or RNG.
+  void InitializeHashSeed();
 
   // Bootstraps the object heap with the core set of objects required to run.
   // Returns whether it succeeded.
@@ -1299,10 +1309,12 @@ class Heap {
     uint64_t capped_physical_memory =
         Max(Min(physical_memory, max_physical_memory), min_physical_memory);
     // linearly scale max semi-space size: (X-A)/(B-A)*(D-C)+C
-    return static_cast<int>(((capped_physical_memory - min_physical_memory) *
-                             (kMaxSemiSpaceSize - kMinSemiSpaceSize)) /
-                                (max_physical_memory - min_physical_memory) +
-                            kMinSemiSpaceSize);
+    int semi_space_size_in_kb =
+        static_cast<int>(((capped_physical_memory - min_physical_memory) *
+                          (kMaxSemiSpaceSizeInKB - kMinSemiSpaceSizeInKB)) /
+                             (max_physical_memory - min_physical_memory) +
+                         kMinSemiSpaceSizeInKB);
+    return RoundUp(semi_space_size_in_kb, (1 << kPageSizeBits) / KB);
   }
 
   // Returns the capacity of the heap in bytes w/o growing. Heap grows when
@@ -1457,7 +1469,7 @@ class Heap {
   // in the hash map is created. Otherwise the entry (including a the count
   // value) is cached on the local pretenuring feedback.
   template <UpdateAllocationSiteMode mode>
-  inline void UpdateAllocationSite(HeapObject* object,
+  inline void UpdateAllocationSite(Map* map, HeapObject* object,
                                    base::HashMap* pretenuring_feedback);
 
   // Removes an entry from the global pretenuring storage.
@@ -1469,8 +1481,16 @@ class Heap {
   void MergeAllocationSitePretenuringFeedback(
       const base::HashMap& local_pretenuring_feedback);
 
-// =============================================================================
+  // ===========================================================================
+  // Retaining path tracking. ==================================================
+  // ===========================================================================
 
+  // Adds the given object to the weak table of retaining path targets.
+  // On each GC if the marker discovers the object, it will print the retaining
+  // path. This requires --track-retaining-path flag.
+  void AddRetainingPathTarget(Handle<HeapObject> object);
+
+// =============================================================================
 #ifdef VERIFY_HEAP
   // Verify the heap is in its normal state before or after a GC.
   void Verify();
@@ -1487,6 +1507,25 @@ class Heap {
   void ReportHeapStatistics(const char* title);
   void ReportCodeStatistics(const char* title);
 #endif
+  void* GetRandomMmapAddr() {
+    void* result = base::OS::GetRandomMmapAddr();
+#if V8_TARGET_ARCH_X64
+#if V8_OS_MACOSX
+    // The Darwin kernel [as of macOS 10.12.5] does not clean up page
+    // directory entries [PDE] created from mmap or mach_vm_allocate, even
+    // after the region is destroyed. Using a virtual address space that is
+    // too large causes a leak of about 1 wired [can never be paged out] page
+    // per call to mmap(). The page is only reclaimed when the process is
+    // killed. Confine the hint to a 32-bit section of the virtual address
+    // space. See crbug.com/700928.
+    uintptr_t offset =
+        reinterpret_cast<uintptr_t>(base::OS::GetRandomMmapAddr()) &
+        kMmapRegionMask;
+    result = reinterpret_cast<void*>(mmap_region_base_ + offset);
+#endif  // V8_OS_MACOSX
+#endif  // V8_TARGET_ARCH_X64
+    return result;
+  }
 
   static const char* GarbageCollectionReasonToString(
       GarbageCollectionReason gc_reason);
@@ -1592,6 +1631,8 @@ class Heap {
 
   static const int kInitialFeedbackCapacity = 256;
 
+  static const int kMaxScavengerTasks = 1;
+
   Heap();
 
   static String* UpdateNewSpaceReferenceInExternalStringTableEntry(
@@ -1630,6 +1671,8 @@ class Heap {
   inline bool ShouldFinalizeIncrementalMarking() const {
     return (current_gc_flags_ & kFinalizeIncrementalMarkingMask) != 0;
   }
+
+  int NumberOfScavengeTasks();
 
   void PreprocessStackTraces();
 
@@ -2108,9 +2151,16 @@ class Heap {
   MUST_USE_RESULT AllocationResult
       AllocateCode(int object_size, bool immovable);
 
+  void set_force_oom(bool value) { force_oom_ = value; }
+
+  // ===========================================================================
+  // Retaining path tracing ====================================================
   // ===========================================================================
 
-  void set_force_oom(bool value) { force_oom_ = value; }
+  void AddRetainer(HeapObject* retainer, HeapObject* object);
+  void AddRetainingRoot(Root root, HeapObject* object);
+  bool IsRetainingPathTarget(HeapObject* object);
+  void PrintRetainingPath(HeapObject* object);
 
   // The amount of external memory registered through the API.
   int64_t external_memory_;
@@ -2192,6 +2242,9 @@ class Heap {
 
   // How many gc happened.
   unsigned int gc_count_;
+
+  static const uintptr_t kMmapRegionMask = 0xFFFFFFFFu;
+  uintptr_t mmap_region_base_;
 
   // For post mortem debugging.
   int remembered_unmapped_pages_index_;
@@ -2280,6 +2333,7 @@ class Heap {
   ObjectStats* dead_object_stats_;
 
   ScavengeJob* scavenge_job_;
+  base::Semaphore parallel_scavenge_semaphore_;
 
   AllocationObserver* idle_scavenge_observer_;
 
@@ -2344,12 +2398,17 @@ class Heap {
 
   HeapObject* pending_layout_change_object_;
 
+  std::map<HeapObject*, HeapObject*> retainer_;
+  std::map<HeapObject*, Root> retaining_root_;
+
   // Classes in "heap" can be friends.
   friend class AlwaysAllocateScope;
   friend class ConcurrentMarking;
   friend class GCCallbacksScope;
   friend class GCTracer;
   friend class HeapIterator;
+  template <typename ConcreteVisitor>
+  friend class MarkingVisitor;
   friend class IdleScavengeObserver;
   friend class IncrementalMarking;
   friend class IncrementalMarkingJob;

@@ -42,7 +42,7 @@ class CompilerDispatcherTestFlags {
     CHECK_NULL(save_flags_);
     save_flags_ = new SaveFlags();
     FLAG_single_threaded = true;
-    FLAG_ignition = true;
+    FLAG_stress_fullcodegen = false;
     FlagList::EnforceFlagImplications();
     FLAG_compiler_dispatcher = true;
   }
@@ -474,7 +474,7 @@ TEST_F(CompilerDispatcherTest, CompileOnBackgroundThread) {
 
   // Make compiling super expensive, and advance job as much as possible on the
   // foreground thread.
-  dispatcher.tracer_->RecordCompile(50000.0, 1);
+  dispatcher.tracer_->RecordCompile(50000.0);
   platform.RunIdleTask(10.0, 0.0);
   ASSERT_EQ(CompileJobStatus::kReadyToCompile,
             GetJobStatus(dispatcher.jobs_.begin()->second));
@@ -518,7 +518,7 @@ TEST_F(CompilerDispatcherTest, FinishNowWithBackgroundTask) {
 
   // Make compiling super expensive, and advance job as much as possible on the
   // foreground thread.
-  dispatcher.tracer_->RecordCompile(50000.0, 1);
+  dispatcher.tracer_->RecordCompile(50000.0);
   platform.RunIdleTask(10.0, 0.0);
   ASSERT_EQ(CompileJobStatus::kReadyToCompile,
             GetJobStatus(dispatcher.jobs_.begin()->second));
@@ -615,7 +615,7 @@ TEST_F(CompilerDispatcherTest, AsyncAbortAllPendingBackgroundTask) {
 
   // Make compiling super expensive, and advance job as much as possible on the
   // foreground thread.
-  dispatcher.tracer_->RecordCompile(50000.0, 1);
+  dispatcher.tracer_->RecordCompile(50000.0);
   platform.RunIdleTask(10.0, 0.0);
   ASSERT_EQ(CompileJobStatus::kReadyToCompile,
             GetJobStatus(dispatcher.jobs_.begin()->second));
@@ -663,7 +663,7 @@ TEST_F(CompilerDispatcherTest, AsyncAbortAllRunningBackgroundTask) {
 
   // Make compiling super expensive, and advance job as much as possible on the
   // foreground thread.
-  dispatcher.tracer_->RecordCompile(50000.0, 1);
+  dispatcher.tracer_->RecordCompile(50000.0);
   platform.RunIdleTask(10.0, 0.0);
   ASSERT_EQ(CompileJobStatus::kReadyToCompile,
             GetJobStatus(dispatcher.jobs_.begin()->second));
@@ -740,7 +740,7 @@ TEST_F(CompilerDispatcherTest, FinishNowDuringAbortAll) {
 
   // Make compiling super expensive, and advance job as much as possible on the
   // foreground thread.
-  dispatcher.tracer_->RecordCompile(50000.0, 1);
+  dispatcher.tracer_->RecordCompile(50000.0);
   platform.RunIdleTask(10.0, 0.0);
   ASSERT_EQ(CompileJobStatus::kReadyToCompile,
             GetJobStatus(dispatcher.jobs_.begin()->second));
@@ -1231,7 +1231,7 @@ TEST_F(CompilerDispatcherTest, CompileMultipleOnBackgroundThread) {
 
   // Make compiling super expensive, and advance job as much as possible on the
   // foreground thread.
-  dispatcher.tracer_->RecordCompile(50000.0, 1);
+  dispatcher.tracer_->RecordCompile(50000.0);
   platform.RunIdleTask(10.0, 0.0);
   ASSERT_EQ(dispatcher.jobs_.size(), 2u);
   ASSERT_EQ(CompileJobStatus::kReadyToCompile,

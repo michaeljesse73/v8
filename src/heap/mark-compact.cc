@@ -1052,7 +1052,8 @@ class MarkCompactMarkingVisitor final
                                Object** end) final {
     // Mark all objects pointed to in [start, end).
     const int kMinRangeForMarkingRecursion = 64;
-    if (end - start >= kMinRangeForMarkingRecursion) {
+    if (end - start >= kMinRangeForMarkingRecursion &&
+        V8_LIKELY(!FLAG_track_retaining_path)) {
       if (VisitUnmarkedObjects(host, start, end)) return;
       // We are close to a stack overflow, so just mark the objects.
     }
@@ -1062,8 +1063,8 @@ class MarkCompactMarkingVisitor final
   }
 
   // Marks the object black and pushes it on the marking stack.
-  V8_INLINE void MarkObject(HeapObject* object) {
-    collector_->MarkObject(object);
+  V8_INLINE void MarkObject(HeapObject* host, HeapObject* object) {
+    collector_->MarkObject(host, object);
   }
 
   // Marks the object black without pushing it on the marking stack. Returns
@@ -1076,7 +1077,7 @@ class MarkCompactMarkingVisitor final
     if (!(*p)->IsHeapObject()) return;
     HeapObject* target_object = HeapObject::cast(*p);
     collector_->RecordSlot(host, p, target_object);
-    collector_->MarkObject(target_object);
+    collector_->MarkObject(host, target_object);
   }
 
  protected:
@@ -1106,7 +1107,7 @@ class MarkCompactMarkingVisitor final
       Map* map = obj->map();
       ObjectMarking::WhiteToBlack(obj, MarkingState::Internal(obj));
       // Mark the map pointer and the body.
-      collector_->MarkObject(map);
+      collector_->MarkObject(obj, map);
       Visit(map, obj);
     }
   }
@@ -1132,19 +1133,20 @@ class MarkCompactCollector::RootMarkingVisitor : public ObjectVisitor,
       : collector_(heap->mark_compact_collector()), visitor_(collector_) {}
 
   void VisitPointer(HeapObject* host, Object** p) override {
-    MarkObjectByPointer(p);
+    MarkObjectByPointer(host, p);
   }
 
   void VisitPointers(HeapObject* host, Object** start, Object** end) override {
-    for (Object** p = start; p < end; p++) MarkObjectByPointer(p);
+    for (Object** p = start; p < end; p++) MarkObjectByPointer(host, p);
   }
 
   void VisitRootPointer(Root root, Object** p) override {
-    MarkObjectByPointer(p);
+    MarkObjectByPointer(nullptr, p, root);
   }
 
   void VisitRootPointers(Root root, Object** start, Object** end) override {
-    for (Object** p = start; p < end; p++) MarkObjectByPointer(p);
+    for (Object** p = start; p < end; p++)
+      MarkObjectByPointer(nullptr, p, root);
   }
 
   // Skip the weak next code link in a code object, which is visited in
@@ -1152,16 +1154,24 @@ class MarkCompactCollector::RootMarkingVisitor : public ObjectVisitor,
   void VisitNextCodeLink(Code* host, Object** p) override {}
 
  private:
-  void MarkObjectByPointer(Object** p) {
+  void MarkObjectByPointer(HeapObject* host, Object** p,
+                           Root root = Root::kUnknown) {
     if (!(*p)->IsHeapObject()) return;
 
     HeapObject* object = HeapObject::cast(*p);
 
     if (ObjectMarking::WhiteToBlack<AccessMode::NON_ATOMIC>(
             object, MarkingState::Internal(object))) {
+      if (V8_UNLIKELY(FLAG_track_retaining_path)) {
+        if (host) {
+          object->GetHeap()->AddRetainer(host, object);
+        } else {
+          object->GetHeap()->AddRetainingRoot(root, object);
+        }
+      }
       Map* map = object->map();
       // Mark the map pointer and body, and push them on the marking stack.
-      collector_->MarkObject(map);
+      collector_->MarkObject(object, map);
       visitor_.Visit(map, object);
       // Mark all the objects reachable from the map and body.  May leave
       // overflowed objects in the heap.
@@ -1699,7 +1709,7 @@ class EvacuateNewSpaceVisitor final : public EvacuateVisitorBase {
       promoted_size_ += size;
       return true;
     }
-    heap_->UpdateAllocationSite<Heap::kCached>(object,
+    heap_->UpdateAllocationSite<Heap::kCached>(object->map(), object,
                                                local_pretenuring_feedback_);
     HeapObject* target = nullptr;
     AllocationSpace space = AllocateTargetObject(object, size, &target);
@@ -1845,7 +1855,7 @@ class EvacuateNewSpacePageVisitor final : public HeapObjectVisitor {
 
   inline bool Visit(HeapObject* object, int size) {
     if (mode == NEW_TO_NEW) {
-      heap_->UpdateAllocationSite<Heap::kCached>(object,
+      heap_->UpdateAllocationSite<Heap::kCached>(object->map(), object,
                                                  local_pretenuring_feedback_);
     } else if (mode == NEW_TO_OLD) {
       object->IterateBodyFast(record_visitor_);
@@ -1961,7 +1971,7 @@ void MarkCompactCollector::EmptyMarkingWorklist() {
         object, MarkingState::Internal(object))));
 
     Map* map = object->map();
-    MarkObject(map);
+    MarkObject(object, map);
     visitor.Visit(map, object);
   }
   DCHECK(marking_worklist()->IsEmpty());
@@ -2325,9 +2335,10 @@ class PageMarkingItem : public MarkingItem {
   inline Heap* heap() { return chunk_->heap(); }
 
   void MarkUntypedPointers(YoungGenerationMarkingTask* task) {
-    RememberedSet<OLD_TO_NEW>::Iterate(chunk_, [this, task](Address slot) {
-      return CheckAndMarkObject(task, slot);
-    });
+    RememberedSet<OLD_TO_NEW>::Iterate(
+        chunk_,
+        [this, task](Address slot) { return CheckAndMarkObject(task, slot); },
+        SlotSet::PREFREE_EMPTY_BUCKETS);
   }
 
   void MarkTypedPointers(YoungGenerationMarkingTask* task) {
@@ -2973,6 +2984,22 @@ void MarkCompactCollector::ClearSimpleMapTransition(Map* map,
   }
 }
 
+namespace {
+
+Map* GetTransitionArrayOwnerMap(Heap* heap, TransitionArray* transitions,
+                                int num_transitions) {
+  // Search for any non-shortcut transition.
+  for (int i = 0; i < num_transitions; i++) {
+    Name* key = transitions->GetKey(i);
+    if (TransitionArray::IsShortcutTransition(key)) continue;
+    Map* target = transitions->GetTarget(i);
+    Map* parent = Map::cast(target->constructor_or_backpointer());
+    return parent;
+  }
+  return nullptr;
+}
+
+}  // namespace
 
 void MarkCompactCollector::ClearFullMapTransitions() {
   HeapObject* undefined = heap()->undefined_value();
@@ -2982,16 +3009,20 @@ void MarkCompactCollector::ClearFullMapTransitions() {
     int num_transitions = array->number_of_entries();
     DCHECK_EQ(TransitionArray::NumberOfTransitions(array), num_transitions);
     if (num_transitions > 0) {
-      Map* map = array->GetTarget(0);
-      Map* parent = Map::cast(map->constructor_or_backpointer());
-      bool parent_is_alive =
-          ObjectMarking::IsBlackOrGrey(parent, MarkingState::Internal(parent));
-      DescriptorArray* descriptors =
-          parent_is_alive ? parent->instance_descriptors() : nullptr;
-      bool descriptors_owner_died =
-          CompactTransitionArray(parent, array, descriptors);
-      if (descriptors_owner_died) {
-        TrimDescriptorArray(parent, descriptors);
+      Map* parent = GetTransitionArrayOwnerMap(heap(), array, num_transitions);
+      if (!parent) {
+        // The transition array contains only shortcut transitions.
+        CompactTransitionArray(parent, array, nullptr);
+      } else {
+        bool parent_is_alive = ObjectMarking::IsBlackOrGrey(
+            parent, MarkingState::Internal(parent));
+        DescriptorArray* descriptors =
+            parent_is_alive ? parent->instance_descriptors() : nullptr;
+        bool descriptors_owner_died =
+            CompactTransitionArray(parent, array, descriptors);
+        if (descriptors_owner_died) {
+          TrimDescriptorArray(parent, descriptors);
+        }
       }
     }
     obj = array->next_link();
@@ -3000,6 +3031,41 @@ void MarkCompactCollector::ClearFullMapTransitions() {
   heap()->set_encountered_transition_arrays(Smi::kZero);
 }
 
+namespace {
+
+// Returns true if the target is live and the transition entry should be kept
+// in the transition array. In addition, if current transition entry is a dead
+// shortcut transition this function tries to fixup the entry to make it point
+// to the next live target in a shortcut chain.
+bool FixupDeadTransition(bool is_shortcut_transition, Name* key, Map* target,
+                         TransitionArray* transitions, int transition_index) {
+  if (!ObjectMarking::IsWhite(target, MarkingState::Internal(target))) {
+    return true;
+  }
+  if (!is_shortcut_transition) {
+    // Target map is dead.
+    return false;
+  }
+
+  Symbol* symbol = Symbol::cast(key);
+  // Follow the shortcut transition chain in order to find live target.
+  for (;;) {
+    target = TransitionArray::SearchSpecial(target, symbol);
+    if (target == nullptr ||
+        !ObjectMarking::IsWhite(target, MarkingState::Internal(target))) {
+      break;
+    }
+  }
+  if (target) {
+    // Found live target in shortcuts chain, now fixup the transitions array.
+    // Target slots do not need to be recorded since maps are not compacted.
+    transitions->SetTarget(transition_index, target);
+    return true;
+  }
+  return false;
+}
+
+}  // namespace
 
 bool MarkCompactCollector::CompactTransitionArray(
     Map* map, TransitionArray* transitions, DescriptorArray* descriptors) {
@@ -3008,16 +3074,24 @@ bool MarkCompactCollector::CompactTransitionArray(
   int transition_index = 0;
   // Compact all live transitions to the left.
   for (int i = 0; i < num_transitions; ++i) {
-    Map* target = transitions->GetTarget(i);
-    DCHECK_EQ(target->constructor_or_backpointer(), map);
-    if (ObjectMarking::IsWhite(target, MarkingState::Internal(target))) {
-      if (descriptors != nullptr &&
+    Name* key;
+    Map* target;
+    std::tie(key, target) = TransitionArray::GetKeyAndTarget(transitions, i);
+    bool is_shortcut_transition =
+        TransitionArray::IsShortcutTransition(heap(), key);
+
+    DCHECK_IMPLIES(!is_shortcut_transition,
+                   target->constructor_or_backpointer() == map);
+
+    bool is_live_transition = FixupDeadTransition(is_shortcut_transition, key,
+                                                  target, transitions, i);
+    if (!is_live_transition) {
+      if (!is_shortcut_transition && descriptors != nullptr &&
           target->instance_descriptors() == descriptors) {
         descriptors_owner_died = true;
       }
     } else {
       if (i != transition_index) {
-        Name* key = transitions->GetKey(i);
         transitions->SetKey(transition_index, key);
         Object** key_slot = transitions->GetKeySlot(transition_index);
         RecordSlot(transitions, key_slot, key);
@@ -4260,27 +4334,39 @@ class RememberedSetUpdatingItem : public UpdatingItem {
     // those slots using atomics.
     if (chunk_->slot_set<OLD_TO_NEW, AccessMode::NON_ATOMIC>() != nullptr) {
       if (chunk_->owner() == heap_->map_space()) {
-        RememberedSet<OLD_TO_NEW>::Iterate(chunk_, [this](Address slot) {
-          return CheckAndUpdateOldToNewSlot<AccessMode::ATOMIC>(slot);
-        });
+        RememberedSet<OLD_TO_NEW>::Iterate(
+            chunk_,
+            [this](Address slot) {
+              return CheckAndUpdateOldToNewSlot<AccessMode::ATOMIC>(slot);
+            },
+            SlotSet::PREFREE_EMPTY_BUCKETS);
       } else {
-        RememberedSet<OLD_TO_NEW>::Iterate(chunk_, [this](Address slot) {
-          return CheckAndUpdateOldToNewSlot<AccessMode::NON_ATOMIC>(slot);
-        });
+        RememberedSet<OLD_TO_NEW>::Iterate(
+            chunk_,
+            [this](Address slot) {
+              return CheckAndUpdateOldToNewSlot<AccessMode::NON_ATOMIC>(slot);
+            },
+            SlotSet::PREFREE_EMPTY_BUCKETS);
       }
     }
     if ((updating_mode_ == RememberedSetUpdatingMode::ALL) &&
         (chunk_->slot_set<OLD_TO_OLD, AccessMode::NON_ATOMIC>() != nullptr)) {
       if (chunk_->owner() == heap_->map_space()) {
-        RememberedSet<OLD_TO_OLD>::Iterate(chunk_, [](Address slot) {
-          return UpdateSlot<AccessMode::ATOMIC>(
-              reinterpret_cast<Object**>(slot));
-        });
+        RememberedSet<OLD_TO_OLD>::Iterate(
+            chunk_,
+            [](Address slot) {
+              return UpdateSlot<AccessMode::ATOMIC>(
+                  reinterpret_cast<Object**>(slot));
+            },
+            SlotSet::PREFREE_EMPTY_BUCKETS);
       } else {
-        RememberedSet<OLD_TO_OLD>::Iterate(chunk_, [](Address slot) {
-          return UpdateSlot<AccessMode::NON_ATOMIC>(
-              reinterpret_cast<Object**>(slot));
-        });
+        RememberedSet<OLD_TO_OLD>::Iterate(
+            chunk_,
+            [](Address slot) {
+              return UpdateSlot<AccessMode::NON_ATOMIC>(
+                  reinterpret_cast<Object**>(slot));
+            },
+            SlotSet::PREFREE_EMPTY_BUCKETS);
       }
     }
   }

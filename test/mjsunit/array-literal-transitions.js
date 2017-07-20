@@ -26,7 +26,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Flags: --allow-natives-syntax --expose-gc --ignition-osr --no-always-opt
-// Flags: --opt
+// Flags: --opt --no-stress-fullcodegen
 
 // IC and Crankshaft support for smi-only elements in dynamic array literals.
 function get(foo) { return foo; }  // Used to generate dynamic values.
@@ -147,7 +147,7 @@ array = deopt_array_literal_all_smis(4);
 assertEquals(0, array[0]);
 assertEquals(1, array[1]);
 assertEquals(4, array[2]);
-  %OptimizeFunctionOnNextCall(deopt_array_literal_all_smis);
+%OptimizeFunctionOnNextCall(deopt_array_literal_all_smis);
 array = deopt_array_literal_all_smis(5);
 array = deopt_array_literal_all_smis(6);
 assertOptimized(deopt_array_literal_all_smis);
@@ -172,7 +172,7 @@ array = deopt_array_literal_all_doubles(0.5);
 assertEquals(0.5, array[0]);
 assertEquals(1, array[1]);
 assertEquals(0.5, array[2]);
-  %OptimizeFunctionOnNextCall(deopt_array_literal_all_doubles);
+%OptimizeFunctionOnNextCall(deopt_array_literal_all_doubles);
 array = deopt_array_literal_all_doubles(5);
 array = deopt_array_literal_all_doubles(6);
 assertOptimized(deopt_array_literal_all_doubles);

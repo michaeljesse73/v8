@@ -1246,7 +1246,7 @@ TEST(InterpreterStoreKeyedProperty) {
   CHECK_EQ(Smi::cast(*result), Smi::FromInt(999));
 }
 
-static void TestInterpreterCall(TailCallMode tail_call_mode) {
+TEST(InterpreterCall) {
   HandleAndZoneScope handles;
   Isolate* isolate = handles.main_isolate();
   Zone* zone = handles.main_zone();
@@ -1275,11 +1275,7 @@ static void TestInterpreterCall(TailCallMode tail_call_mode) {
         .StoreAccumulatorInRegister(reg)
         .MoveRegister(builder.Receiver(), args[0]);
 
-    if (tail_call_mode == TailCallMode::kAllow) {
-      builder.TailCall(reg, args, call_slot_index);
-    } else {
-      builder.CallProperty(reg, args, call_slot_index);
-    }
+    builder.CallProperty(reg, args, call_slot_index);
 
     builder.Return();
     ast_factory.Internalize(isolate);
@@ -1302,11 +1298,7 @@ static void TestInterpreterCall(TailCallMode tail_call_mode) {
     builder.LoadNamedProperty(builder.Receiver(), name, slot_index)
         .StoreAccumulatorInRegister(reg)
         .MoveRegister(builder.Receiver(), args[0]);
-    if (tail_call_mode == TailCallMode::kAllow) {
-      builder.TailCall(reg, args, call_slot_index);
-    } else {
-      builder.CallProperty(reg, args, call_slot_index);
-    }
+    builder.CallProperty(reg, args, call_slot_index);
     builder.Return();
     ast_factory.Internalize(isolate);
     Handle<BytecodeArray> bytecode_array = builder.ToBytecodeArray(isolate);
@@ -1338,11 +1330,7 @@ static void TestInterpreterCall(TailCallMode tail_call_mode) {
         .LoadLiteral(Smi::FromInt(11))
         .StoreAccumulatorInRegister(args[2]);
 
-    if (tail_call_mode == TailCallMode::kAllow) {
-      builder.TailCall(reg, args, call_slot_index);
-    } else {
-      builder.CallProperty(reg, args, call_slot_index);
-    }
+    builder.CallProperty(reg, args, call_slot_index);
 
     builder.Return();
 
@@ -1391,11 +1379,7 @@ static void TestInterpreterCall(TailCallMode tail_call_mode) {
         .LoadLiteral(ast_factory.NewString(ast_factory.GetOneByteString("j")))
         .StoreAccumulatorInRegister(args[10]);
 
-    if (tail_call_mode == TailCallMode::kAllow) {
-      builder.TailCall(reg, args, call_slot_index);
-    } else {
-      builder.CallProperty(reg, args, call_slot_index);
-    }
+    builder.CallProperty(reg, args, call_slot_index);
 
     builder.Return();
 
@@ -1418,10 +1402,6 @@ static void TestInterpreterCall(TailCallMode tail_call_mode) {
     CHECK(i::String::cast(*return_val)->Equals(*expected));
   }
 }
-
-TEST(InterpreterCall) { TestInterpreterCall(TailCallMode::kDisallow); }
-
-TEST(InterpreterTailCall) { TestInterpreterCall(TailCallMode::kAllow); }
 
 static BytecodeArrayBuilder& SetRegister(BytecodeArrayBuilder& builder,
                                          Register reg, int value,
@@ -4921,161 +4901,6 @@ TEST(InterpreterGenerators) {
 
     Handle<i::Object> return_value = callable().ToHandleChecked();
     CHECK(return_value->SameValue(*tests[i].second));
-  }
-}
-
-TEST(InterpreterToPrimitiveToString) {
-  HandleAndZoneScope handles;
-  Isolate* isolate = handles.main_isolate();
-  Zone* zone = handles.main_zone();
-  Factory* factory = isolate->factory();
-
-  struct TestCase {
-    Handle<Object> input;
-    Handle<Object> expected_value;
-    int32_t expected_feedback;
-  } test_cases[] = {
-      {factory->NewStringFromAsciiChecked("Foo"),
-       factory->NewStringFromAsciiChecked("Foo"),
-       BinaryOperationFeedback::kNonEmptyString},
-      {factory->NewStringFromAsciiChecked(""),
-       factory->NewStringFromAsciiChecked(""),
-       BinaryOperationFeedback::kString},
-      {handle(Smi::FromInt(123), isolate),
-       factory->NewStringFromAsciiChecked("123"),
-       BinaryOperationFeedback::kAny},
-      {factory->NewHeapNumber(2.45), factory->NewStringFromAsciiChecked("2.45"),
-       BinaryOperationFeedback::kAny},
-      {factory->undefined_value(),
-       factory->NewStringFromAsciiChecked("undefined"),
-       BinaryOperationFeedback::kAny},
-      {InterpreterTester::NewObject("({ val : 123 })"),
-       factory->NewStringFromAsciiChecked("[object Object]"),
-       BinaryOperationFeedback::kAny},
-  };
-
-  for (size_t i = 0; i < arraysize(test_cases); i++) {
-    BytecodeArrayBuilder builder(isolate, zone, 1, 1);
-    FeedbackVectorSpec feedback_spec(zone);
-    FeedbackSlot slot = feedback_spec.AddInterpreterBinaryOpICSlot();
-    Handle<i::FeedbackMetadata> metadata =
-        NewFeedbackMetadata(isolate, &feedback_spec);
-
-    Register reg0(0);
-    builder.LoadAccumulatorWithRegister(builder.Receiver())
-        .ToPrimitiveToString(reg0, GetIndex(slot))
-        .LoadAccumulatorWithRegister(reg0)
-        .Return();
-    Handle<BytecodeArray> bytecode_array = builder.ToBytecodeArray(isolate);
-    InterpreterTester tester(isolate, bytecode_array, metadata);
-    auto callable = tester.GetCallable<Handle<Object>>();
-
-    Handle<Object> return_value =
-        callable(test_cases[i].input).ToHandleChecked();
-    CHECK(return_value->SameValue(*test_cases[i].expected_value));
-
-    Object* feedback = callable.vector()->Get(slot);
-    CHECK(feedback->IsSmi());
-    CHECK_EQ(test_cases[i].expected_feedback,
-             static_cast<Smi*>(feedback)->value());
-  }
-}
-
-class OneByteResource : public v8::String::ExternalOneByteStringResource {
- public:
-  OneByteResource(const char* data, size_t length)
-      : data_(data), length_(length) {}
-  ~OneByteResource() { i::DeleteArray(data_); }
-  virtual const char* data() const { return data_; }
-  virtual size_t length() const { return length_; }
-
- private:
-  const char* data_;
-  size_t length_;
-};
-
-TEST(InterpreterStringConcat) {
-  HandleAndZoneScope handles;
-  Isolate* isolate = handles.main_isolate();
-  v8::Isolate* ext_isolate = reinterpret_cast<v8::Isolate*>(isolate);
-  Factory* factory = isolate->factory();
-  Zone* zone = handles.main_zone();
-
-  uc16 array1[] = {2001, 2002, 2003};
-  Vector<const uc16> two_byte_str_1(array1);
-
-  uc16 array2[] = {1001, 1002, 1003, 1004, 1005, 1006};
-  Vector<const uc16> two_byte_str_2(array2);
-
-  uc16 array3[] = {1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009};
-  Vector<const uc16> two_byte_str_3(array3);
-
-  OneByteResource* external_resource =
-      new OneByteResource(StrDup("external"), 8);
-  v8::Local<v8::String> ext_string_local =
-      v8::String::NewExternalOneByte(ext_isolate, external_resource)
-          .ToLocalChecked();
-  Handle<String> external_string = v8::Utils::OpenHandle(*ext_string_local);
-
-  Handle<String> thin_string =
-      factory->NewStringFromAsciiChecked("thin_string");
-  factory->InternalizeString(thin_string);
-  DCHECK_IMPLIES(FLAG_thin_strings, thin_string->IsThinString());
-
-  Handle<String> sliced_string =
-      factory->NewStringFromAsciiChecked("string that is going to be sliced");
-  sliced_string = factory->NewProperSubString(sliced_string, 2, 27);
-  DCHECK_IMPLIES(FLAG_string_slices, sliced_string->IsSlicedString());
-
-  Handle<String> inputs[] = {
-      factory->NewStringFromAsciiChecked(""),
-      factory->NewStringFromAsciiChecked("a"),
-      factory->NewStringFromAsciiChecked("abc"),
-      factory->NewStringFromAsciiChecked("underconsmin"),
-      factory->NewStringFromAsciiChecked("long string over cons min length"),
-      factory->NewStringFromTwoByte(two_byte_str_1).ToHandleChecked(),
-      factory->NewStringFromTwoByte(two_byte_str_2).ToHandleChecked(),
-      factory->NewStringFromTwoByte(two_byte_str_3).ToHandleChecked(),
-      factory
-          ->NewConsString(factory->NewStringFromAsciiChecked("foo"),
-                          factory->NewStringFromAsciiChecked("bar"))
-          .ToHandleChecked(),
-      factory
-          ->NewConsString(factory->empty_string(),
-                          factory->NewStringFromAsciiChecked("bar"))
-          .ToHandleChecked(),
-      factory
-          ->NewConsString(factory->NewStringFromAsciiChecked("foo"),
-                          factory->empty_string())
-          .ToHandleChecked(),
-      external_string,
-      thin_string,
-      sliced_string,
-  };
-
-  BytecodeArrayBuilder builder(isolate, zone, 3, 0, 0);
-  RegisterList args(builder.Receiver().index(), 3);
-  builder.StringConcat(args).Return();
-  Handle<BytecodeArray> bytecode_array = builder.ToBytecodeArray(isolate);
-  InterpreterTester tester(isolate, bytecode_array);
-  typedef Handle<Object> H;
-  auto callable = tester.GetCallable<H, H, H>();
-
-  for (size_t i = 0; i < arraysize(inputs); i++) {
-    for (size_t j = 0; j < arraysize(inputs); j++) {
-      for (size_t k = 0; k < arraysize(inputs); k++) {
-        Handle<Object> return_value =
-            callable(inputs[i], inputs[j], inputs[k]).ToHandleChecked();
-        CHECK(return_value->IsString());
-        Handle<String> expected =
-            factory
-                ->NewConsString(factory->NewConsString(inputs[i], inputs[j])
-                                    .ToHandleChecked(),
-                                inputs[k])
-                .ToHandleChecked();
-        CHECK(String::Equals(Handle<String>::cast(return_value), expected));
-      }
-    }
   }
 }
 

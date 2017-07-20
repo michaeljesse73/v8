@@ -18,7 +18,6 @@
 #include "src/compiler/basic-block-instrumentor.h"
 #include "src/compiler/branch-elimination.h"
 #include "src/compiler/bytecode-graph-builder.h"
-#include "src/compiler/check-elimination.h"
 #include "src/compiler/checkpoint-elimination.h"
 #include "src/compiler/code-generator.h"
 #include "src/compiler/common-operator-reducer.h"
@@ -64,7 +63,6 @@
 #include "src/compiler/simplified-operator-reducer.h"
 #include "src/compiler/simplified-operator.h"
 #include "src/compiler/store-store-elimination.h"
-#include "src/compiler/tail-call-optimization.h"
 #include "src/compiler/typed-optimization.h"
 #include "src/compiler/typer.h"
 #include "src/compiler/value-numbering-reducer.h"
@@ -90,13 +88,15 @@ class PipelineData {
       : isolate_(info->isolate()),
         info_(info),
         debug_name_(info_->GetDebugName()),
-        outer_zone_(info_->zone()),
+        may_have_unverifiable_graph_(false),
         zone_stats_(zone_stats),
         pipeline_statistics_(pipeline_statistics),
         graph_zone_scope_(zone_stats_, ZONE_NAME),
         graph_zone_(graph_zone_scope_.zone()),
         instruction_zone_scope_(zone_stats_, ZONE_NAME),
         instruction_zone_(instruction_zone_scope_.zone()),
+        codegen_zone_scope_(zone_stats_, ZONE_NAME),
+        codegen_zone_(codegen_zone_scope_.zone()),
         register_allocation_zone_scope_(zone_stats_, ZONE_NAME),
         register_allocation_zone_(register_allocation_zone_scope_.zone()) {
     PhaseScope scope(pipeline_statistics, "init pipeline data");
@@ -134,6 +134,8 @@ class PipelineData {
         jsgraph_(jsgraph),
         instruction_zone_scope_(zone_stats_, ZONE_NAME),
         instruction_zone_(instruction_zone_scope_.zone()),
+        codegen_zone_scope_(zone_stats_, ZONE_NAME),
+        codegen_zone_(codegen_zone_scope_.zone()),
         register_allocation_zone_scope_(zone_stats_, ZONE_NAME),
         register_allocation_zone_(register_allocation_zone_scope_.zone()),
         protected_instructions_(protected_instructions) {
@@ -154,6 +156,8 @@ class PipelineData {
         schedule_(schedule),
         instruction_zone_scope_(zone_stats_, ZONE_NAME),
         instruction_zone_(instruction_zone_scope_.zone()),
+        codegen_zone_scope_(zone_stats_, ZONE_NAME),
+        codegen_zone_(codegen_zone_scope_.zone()),
         register_allocation_zone_scope_(zone_stats_, ZONE_NAME),
         register_allocation_zone_(register_allocation_zone_scope_.zone()) {
     is_asm_ = false;
@@ -169,6 +173,8 @@ class PipelineData {
         instruction_zone_scope_(zone_stats_, ZONE_NAME),
         instruction_zone_(sequence->zone()),
         sequence_(sequence),
+        codegen_zone_scope_(zone_stats_, ZONE_NAME),
+        codegen_zone_(codegen_zone_scope_.zone()),
         register_allocation_zone_scope_(zone_stats_, ZONE_NAME),
         register_allocation_zone_(register_allocation_zone_scope_.zone()) {
     is_asm_ =
@@ -180,6 +186,7 @@ class PipelineData {
     code_generator_ = nullptr;
     DeleteRegisterAllocationZone();
     DeleteInstructionZone();
+    DeleteCodegenZone();
     DeleteGraphZone();
   }
 
@@ -204,7 +211,7 @@ class PipelineData {
   CodeGenerator* code_generator() const { return code_generator_; }
 
   // RawMachineAssembler generally produces graphs which cannot be verified.
-  bool MayHaveUnverifiableGraph() const { return outer_zone_ == nullptr; }
+  bool MayHaveUnverifiableGraph() const { return may_have_unverifiable_graph_; }
 
   Zone* graph_zone() const { return graph_zone_; }
   Graph* graph() const { return graph_; }
@@ -234,6 +241,7 @@ class PipelineData {
   void reset_schedule() { schedule_ = nullptr; }
 
   Zone* instruction_zone() const { return instruction_zone_; }
+  Zone* codegen_zone() const { return codegen_zone_; }
   InstructionSequence* sequence() const { return sequence_; }
   Frame* frame() const { return frame_; }
 
@@ -279,6 +287,12 @@ class PipelineData {
     instruction_zone_scope_.Destroy();
     instruction_zone_ = nullptr;
     sequence_ = nullptr;
+  }
+
+  void DeleteCodegenZone() {
+    if (codegen_zone_ == nullptr) return;
+    codegen_zone_scope_.Destroy();
+    codegen_zone_ = nullptr;
     frame_ = nullptr;
   }
 
@@ -310,7 +324,7 @@ class PipelineData {
     if (descriptor != nullptr) {
       fixed_frame_size = descriptor->CalculateFixedFrameSize();
     }
-    frame_ = new (instruction_zone()) Frame(fixed_frame_size);
+    frame_ = new (codegen_zone()) Frame(fixed_frame_size);
   }
 
   void InitializeRegisterAllocationData(const RegisterConfiguration* config,
@@ -333,8 +347,9 @@ class PipelineData {
 
   void InitializeCodeGenerator(Linkage* linkage) {
     DCHECK_NULL(code_generator_);
-    code_generator_ = new CodeGenerator(frame(), linkage, sequence(), info(),
-                                        osr_helper_, start_source_position_);
+    code_generator_ =
+        new CodeGenerator(codegen_zone(), frame(), linkage, sequence(), info(),
+                          osr_helper_, start_source_position_);
   }
 
   void BeginPhaseKind(const char* phase_kind_name) {
@@ -355,7 +370,7 @@ class PipelineData {
   Isolate* const isolate_;
   CompilationInfo* const info_;
   std::unique_ptr<char[]> debug_name_;
-  Zone* outer_zone_ = nullptr;
+  bool may_have_unverifiable_graph_ = true;
   ZoneStats* const zone_stats_;
   PipelineStatistics* pipeline_statistics_ = nullptr;
   bool compilation_failed_ = false;
@@ -381,15 +396,21 @@ class PipelineData {
   Schedule* schedule_ = nullptr;
 
   // All objects in the following group of fields are allocated in
-  // instruction_zone_.  They are all set to nullptr when the instruction_zone_
+  // instruction_zone_. They are all set to nullptr when the instruction_zone_
   // is destroyed.
   ZoneStats::Scope instruction_zone_scope_;
   Zone* instruction_zone_;
   InstructionSequence* sequence_ = nullptr;
+
+  // All objects in the following group of fields are allocated in
+  // codegen_zone_. They are all set to nullptr when the codegen_zone_
+  // is destroyed.
+  ZoneStats::Scope codegen_zone_scope_;
+  Zone* codegen_zone_;
   Frame* frame_ = nullptr;
 
   // All objects in the following group of fields are allocated in
-  // register_allocation_zone_.  They are all set to nullptr when the zone is
+  // register_allocation_zone_. They are all set to nullptr when the zone is
   // destroyed.
   ZoneStats::Scope register_allocation_zone_scope_;
   Zone* register_allocation_zone_;
@@ -625,6 +646,9 @@ PipelineCompilationJob::Status PipelineCompilationJob::PrepareJobImpl() {
   }
   if (info()->is_optimizing_from_bytecode()) {
     info()->MarkAsDeoptimizationEnabled();
+    if (FLAG_turbo_inlining) {
+      info()->MarkAsInliningEnabled();
+    }
     if (FLAG_inline_accessors) {
       info()->MarkAsAccessorInliningEnabled();
     }
@@ -632,10 +656,6 @@ PipelineCompilationJob::Status PipelineCompilationJob::PrepareJobImpl() {
         isolate()->heap()->one_closure_cell_map()) {
       info()->MarkAsFunctionContextSpecializing();
     }
-  }
-  if (!info()->is_optimizing_from_bytecode()) {
-    if (!Compiler::EnsureBaselineCode(info())) return FAILED;
-  } else if (FLAG_turbo_inlining) {
     info()->MarkAsInliningEnabled();
   }
 
@@ -661,11 +681,11 @@ PipelineCompilationJob::Status PipelineCompilationJob::PrepareJobImpl() {
 
 PipelineCompilationJob::Status PipelineCompilationJob::ExecuteJobImpl() {
   if (!pipeline_.OptimizeGraph(linkage_)) return FAILED;
+  pipeline_.AssembleCode(linkage_);
   return SUCCEEDED;
 }
 
 PipelineCompilationJob::Status PipelineCompilationJob::FinalizeJobImpl() {
-  pipeline_.AssembleCode(linkage_);
   Handle<Code> code = pipeline_.FinalizeCode();
   if (code.is_null()) {
     if (info()->bailout_reason() == kNoReason) {
@@ -764,6 +784,12 @@ class PipelineWasmCompilationJob final : public CompilationJob {
  private:
   size_t AllocatedMemory() const override;
 
+  // Temporary regression check while we get the wasm code off the GC heap, and
+  // until we decontextualize wasm code.
+  // We expect the only embedded objects to be: CEntryStub, undefined, and
+  // the various builtins for throwing exceptions like OOB.
+  void ValidateImmovableEmbeddedObjects() const;
+
   ZoneStats zone_stats_;
   std::unique_ptr<PipelineStatistics> pipeline_statistics_;
   PipelineData data_;
@@ -807,6 +833,7 @@ PipelineWasmCompilationJob::ExecuteJobImpl() {
   }
 
   if (!pipeline_.ScheduleAndSelectInstructions(&linkage_, true)) return FAILED;
+  pipeline_.AssembleCode(&linkage_);
   return SUCCEEDED;
 }
 
@@ -816,9 +843,44 @@ size_t PipelineWasmCompilationJob::AllocatedMemory() const {
 
 PipelineWasmCompilationJob::Status
 PipelineWasmCompilationJob::FinalizeJobImpl() {
-  pipeline_.AssembleCode(&linkage_);
   pipeline_.FinalizeCode();
+  ValidateImmovableEmbeddedObjects();
   return SUCCEEDED;
+}
+
+void PipelineWasmCompilationJob::ValidateImmovableEmbeddedObjects() const {
+#if !DEBUG
+  return;
+#endif
+  // We expect the only embedded objects to be those originating from
+  // a snapshot, which are immovable.
+  DisallowHeapAllocation no_gc;
+  Handle<Code> result = pipeline_.data_->code();
+  if (result.is_null()) return;
+  // TODO(aseemgarg): remove this restriction when
+  // wasm-to-js is also internally immovable to include WASM_TO_JS
+  if (result->kind() != Code::WASM_FUNCTION) return;
+  static const int kAllGCRefs = (1 << (RelocInfo::LAST_GCED_ENUM + 1)) - 1;
+  for (RelocIterator it(*result, kAllGCRefs); !it.done(); it.next()) {
+    RelocInfo::Mode mode = it.rinfo()->rmode();
+    Object* target = nullptr;
+    switch (mode) {
+      case RelocInfo::CODE_TARGET:
+        target = reinterpret_cast<Object*>(it.rinfo()->target_address());
+        break;
+      case RelocInfo::EMBEDDED_OBJECT:
+        target = it.rinfo()->target_object();
+        break;
+      default:
+        UNREACHABLE();
+    }
+    CHECK_NOT_NULL(target);
+    bool is_immovable =
+        target->IsSmi() || Heap::IsImmovable(HeapObject::cast(target));
+    // TODO(mtrofin): remove the fixed array part when WebAssembly.Table
+    // is backed by native object, rather than a FixedArray
+    CHECK(is_immovable || target->IsFixedArray());
+  }
 }
 
 template <typename Phase>
@@ -920,7 +982,6 @@ struct InliningPhase {
     CheckpointElimination checkpoint_elimination(&graph_reducer);
     CommonOperatorReducer common_reducer(&graph_reducer, data->graph(),
                                          data->common(), data->machine());
-    CheckElimination check_elimination(&graph_reducer, data->jsgraph());
     JSCallReducer call_reducer(&graph_reducer, data->jsgraph(),
                                data->info()->is_bailout_on_uninitialized()
                                    ? JSCallReducer::kBailoutOnUninitialized
@@ -958,7 +1019,6 @@ struct InliningPhase {
             : JSIntrinsicLowering::kDeoptimizationDisabled);
     AddReducer(data, &graph_reducer, &dead_code_elimination);
     AddReducer(data, &graph_reducer, &checkpoint_elimination);
-    AddReducer(data, &graph_reducer, &check_elimination);
     AddReducer(data, &graph_reducer, &common_reducer);
     if (data->info()->is_frame_specializing()) {
       AddReducer(data, &graph_reducer, &frame_specialization);
@@ -1324,13 +1384,11 @@ struct LateOptimizationPhase {
                                          data->common(), data->machine());
     SelectLowering select_lowering(data->jsgraph()->graph(),
                                    data->jsgraph()->common());
-    TailCallOptimization tco(data->common(), data->graph());
     AddReducer(data, &graph_reducer, &branch_condition_elimination);
     AddReducer(data, &graph_reducer, &dead_code_elimination);
     AddReducer(data, &graph_reducer, &machine_reducer);
     AddReducer(data, &graph_reducer, &common_reducer);
     AddReducer(data, &graph_reducer, &select_lowering);
-    AddReducer(data, &graph_reducer, &tco);
     AddReducer(data, &graph_reducer, &value_numbering);
     graph_reducer.ReduceGraph();
   }
@@ -2026,6 +2084,7 @@ void PipelineImpl::AssembleCode(Linkage* linkage) {
   data->BeginPhaseKind("code generation");
   data->InitializeCodeGenerator(linkage);
   Run<AssembleCodePhase>();
+  data->DeleteInstructionZone();
 }
 
 Handle<Code> PipelineImpl::FinalizeCode() {

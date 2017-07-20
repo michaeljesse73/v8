@@ -28,14 +28,14 @@ function g() {
     function(res, rej) {
       late_resolve = res;  // B3 StepIn
     }                      // B4 StepIn
-  );
-}                      // B5 StepIn
+  );                       // B5 StepIn
+}
 
 async function f() {
   var a = 1;
   debugger;            // B0 StepNext
-  a +=                 // B1 StepIn
-       await
+  a +=
+       await           // B1 StepIn
              g();
   return a;            // B6 StepIn
 }                      // B7 Continue

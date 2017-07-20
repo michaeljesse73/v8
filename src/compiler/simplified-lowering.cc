@@ -2447,18 +2447,22 @@ class RepresentationSelector {
         VisitCheck(node, Type::String(), lowering);
         return;
       }
-      case IrOpcode::kCheckSeqString: {
-        VisitCheck(node, Type::SeqString(), lowering);
-        return;
-      }
-      case IrOpcode::kCheckNonEmptyString: {
-        VisitCheck(node, Type::NonEmptyString(), lowering);
-        return;
-      }
       case IrOpcode::kCheckSymbol: {
         VisitCheck(node, Type::Symbol(), lowering);
         return;
       }
+      case IrOpcode::kCheckSeqString: {
+        if (InputIs(node, Type::SeqString())) {
+          VisitUnop(node, UseInfo::AnyTagged(),
+                    MachineRepresentation::kTaggedPointer);
+          if (lower()) DeferReplacement(node, node->InputAt(0));
+        } else {
+          VisitUnop(node, UseInfo::CheckedHeapObjectAsTaggedPointer(),
+                    MachineRepresentation::kTaggedPointer);
+        }
+        return;
+      }
+
       case IrOpcode::kAllocate: {
         ProcessInput(node, 0, UseInfo::TruncatingWord32());
         ProcessRemainingInputs(node, 1);
@@ -2589,6 +2593,14 @@ class RepresentationSelector {
                 node, jsgraph_->simplified()->StoreElement(access));
           }
         }
+        return;
+      }
+      case IrOpcode::kTransitionAndStoreElement: {
+        ProcessInput(node, 0, UseInfo::AnyTagged());         // array
+        ProcessInput(node, 1, UseInfo::TruncatingWord32());  // index
+        ProcessInput(node, 2, UseInfo::AnyTagged());         // value
+        ProcessRemainingInputs(node, 3);
+        SetOutput(node, MachineRepresentation::kNone);
         return;
       }
       case IrOpcode::kLoadTypedElement: {
@@ -2911,7 +2923,6 @@ class RepresentationSelector {
       case IrOpcode::kJSToName:
       case IrOpcode::kJSToObject:
       case IrOpcode::kJSToString:
-      case IrOpcode::kJSToPrimitiveToString:
         VisitInputs(node);
         // Assume the output is tagged.
         return SetOutput(node, MachineRepresentation::kTagged);

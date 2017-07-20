@@ -93,9 +93,6 @@ Node* ConstructorBuiltinsAssembler::EmitFastNewClosure(Node* shared_info,
   Factory* factory = isolate->factory();
   IncrementCounter(isolate->counters()->fast_new_closure_total(), 1);
 
-  // Create a new closure from the given function info in new space
-  Node* result = Allocate(JSFunction::kSize);
-
   Node* compiler_hints =
       LoadObjectField(shared_info, SharedFunctionInfo::kCompilerHintsOffset,
                       MachineType::Uint32());
@@ -114,11 +111,18 @@ Node* ConstructorBuiltinsAssembler::EmitFastNewClosure(Node* shared_info,
   // as the map of the allocated object.
   Node* native_context = LoadNativeContext(context);
   Node* function_map = LoadContextElement(native_context, function_map_index);
+
+  // Create a new closure from the given function info in new space
+  Node* instance_size_in_bytes =
+      TimesPointerSize(LoadMapInstanceSize(function_map));
+  Node* result = Allocate(instance_size_in_bytes);
   StoreMapNoWriteBarrier(result, function_map);
+  InitializeJSObjectBody(result, function_map, instance_size_in_bytes,
+                         JSFunction::kSize);
 
   // Initialize the rest of the function.
   Node* empty_fixed_array = HeapConstant(factory->empty_fixed_array());
-  StoreObjectFieldNoWriteBarrier(result, JSObject::kPropertiesOffset,
+  StoreObjectFieldNoWriteBarrier(result, JSObject::kPropertiesOrHashOffset,
                                  empty_fixed_array);
   StoreObjectFieldNoWriteBarrier(result, JSObject::kElementsOffset,
                                  empty_fixed_array);
@@ -193,14 +197,6 @@ Node* ConstructorBuiltinsAssembler::EmitFastNewClosure(Node* shared_info,
   return result;
 }
 
-Node* ConstructorBuiltinsAssembler::LoadFeedbackVectorSlot(
-    Node* closure, Node* literal_index) {
-  Node* cell = LoadObjectField(closure, JSFunction::kFeedbackVectorOffset);
-  Node* feedback_vector = LoadObjectField(cell, Cell::kValueOffset);
-  return LoadFixedArrayElement(feedback_vector, literal_index, 0,
-                               CodeStubAssembler::SMI_PARAMETERS);
-}
-
 Node* ConstructorBuiltinsAssembler::NotHasBoilerplate(Node* literal_site) {
   return TaggedIsSmi(literal_site);
 }
@@ -209,6 +205,29 @@ Node* ConstructorBuiltinsAssembler::LoadAllocationSiteBoilerplate(Node* site) {
   CSA_ASSERT(this, IsAllocationSite(site));
   return LoadObjectField(site,
                          AllocationSite::kTransitionInfoOrBoilerplateOffset);
+}
+
+Node* ConstructorBuiltinsAssembler::AllocateAllocationSite(
+    Node* closure, Node* literal_index) {
+  CSA_ASSERT(this, TaggedIsPositiveSmi(literal_index));
+  Node* result = Allocate(AllocationSite::kSize);
+  StoreMapNoWriteBarrier(result, Heap::kAllocationSiteMapRootIndex);
+  // Should match AllocationSite::Initialize.
+  StoreObjectFieldNoWriteBarrier(
+      result, AllocationSite::kTransitionInfoOrBoilerplateOffset,
+      SmiConstant(0));
+  StoreObjectFieldNoWriteBarrier(result, AllocationSite::kNestedSiteOffset,
+                                 SmiConstant(0));
+  StoreObjectFieldNoWriteBarrier(result, AllocationSite::kPretenureDataOffset,
+                                 SmiConstant(0));
+  StoreObjectFieldNoWriteBarrier(
+      result, AllocationSite::kPretenureCreateCountOffset, SmiConstant(0));
+  StoreObjectFieldNoWriteBarrier(result, AllocationSite::kWeakNextOffset,
+                                 SmiConstant(0));
+  StoreObjectFieldRoot(result, AllocationSite::kDependentCodeOffset,
+                       Heap::kEmptyFixedArrayRootIndex);
+  StoreFeedbackVectorSlot(closure, literal_index, result);
+  return result;
 }
 
 TF_BUILTIN(FastNewClosure, ConstructorBuiltinsAssembler) {
@@ -541,12 +560,15 @@ void ConstructorBuiltinsAssembler::CreateFastCloneShallowArrayBuiltin(
   BIND(&call_runtime);
   {
     Comment("call runtime");
-    Node* flags = SmiConstant(ArrayLiteral::kShallowElements |
-                              (allocation_site_mode == TRACK_ALLOCATION_SITE
-                                   ? 0
-                                   : ArrayLiteral::kDisableMementos));
+    int flags = AggregateLiteral::kIsShallow;
+    if (allocation_site_mode == TRACK_ALLOCATION_SITE) {
+      // Force initial allocation sites on the initial literal setup step.
+      flags |= AggregateLiteral::kNeedsInitialAllocationSite;
+    } else {
+      flags |= AggregateLiteral::kDisableMementos;
+    }
     Return(CallRuntime(Runtime::kCreateArrayLiteral, context, closure,
-                       literal_index, constant_elements, flags));
+                       literal_index, constant_elements, SmiConstant(flags)));
   }
 }
 
@@ -556,6 +578,55 @@ TF_BUILTIN(FastCloneShallowArrayTrack, ConstructorBuiltinsAssembler) {
 
 TF_BUILTIN(FastCloneShallowArrayDontTrack, ConstructorBuiltinsAssembler) {
   CreateFastCloneShallowArrayBuiltin(DONT_TRACK_ALLOCATION_SITE);
+}
+
+Node* ConstructorBuiltinsAssembler::EmitCreateEmptyArrayLiteral(
+    Node* closure, Node* literal_index, Node* context) {
+  // Array literals always have a valid AllocationSite to properly track
+  // elements transitions.
+  VARIABLE(allocation_site, MachineRepresentation::kTagged,
+           LoadFeedbackVectorSlot(closure, literal_index));
+
+  Label create_empty_array(this),
+      initialize_allocation_site(this, Label::kDeferred), done(this);
+  Branch(TaggedIsSmi(allocation_site.value()), &initialize_allocation_site,
+         &create_empty_array);
+
+  // TODO(cbruni): create the AllocationSite in CSA.
+  BIND(&initialize_allocation_site);
+  {
+    allocation_site.Bind(AllocateAllocationSite(closure, literal_index));
+    Goto(&create_empty_array);
+  }
+
+  BIND(&create_empty_array);
+  CSA_ASSERT(this, IsAllocationSite(allocation_site.value()));
+  Node* kind = SmiToWord32(
+      LoadObjectField(allocation_site.value(),
+                      AllocationSite::kTransitionInfoOrBoilerplateOffset));
+  CSA_ASSERT(this, IsFastElementsKind(kind));
+  Node* native_context = LoadNativeContext(context);
+  Comment("LoadJSArrayElementsMap");
+  Node* array_map = LoadJSArrayElementsMap(kind, native_context);
+  Node* zero = SmiConstant(0);
+  Comment("Allocate JSArray");
+  Node* result =
+      AllocateJSArray(GetInitialFastElementsKind(), array_map, zero, zero,
+                      allocation_site.value(), ParameterMode::SMI_PARAMETERS);
+
+  Goto(&done);
+  BIND(&done);
+
+  return result;
+}
+
+TF_BUILTIN(CreateEmptyArrayLiteral, ConstructorBuiltinsAssembler) {
+  Node* closure = Parameter(CreateEmptyArrayLiteralDescriptor::kClosure);
+  Node* literal_index =
+      Parameter(CreateEmptyArrayLiteralDescriptor::kLiteralIndex);
+  Node* context = Parameter(CreateEmptyArrayLiteralDescriptor::kContext);
+  Node* result = EmitCreateEmptyArrayLiteral(closure, literal_index, context);
+  Return(result);
 }
 
 Node* ConstructorBuiltinsAssembler::EmitFastCloneShallowObject(
@@ -619,7 +690,8 @@ Node* ConstructorBuiltinsAssembler::EmitFastCloneShallowObject(
   STATIC_ASSERT(JSObject::kMaxInstanceSize < kMaxRegularHeapObjectSize);
   Node* instance_size = TimesPointerSize(LoadMapInstanceSize(boilerplate_map));
   Node* allocation_size = instance_size;
-  if (FLAG_allocation_site_pretenuring) {
+  bool needs_allocation_memento = FLAG_allocation_site_pretenuring;
+  if (needs_allocation_memento) {
     // Prepare for inner-allocating the AllocationMemento.
     allocation_size =
         IntPtrAdd(instance_size, IntPtrConstant(AllocationMemento::kSize));
@@ -630,7 +702,7 @@ Node* ConstructorBuiltinsAssembler::EmitFastCloneShallowObject(
     Comment("Initialize Literal Copy");
     // Initialize Object fields.
     StoreMapNoWriteBarrier(copy, boilerplate_map);
-    StoreObjectFieldNoWriteBarrier(copy, JSObject::kPropertiesOffset,
+    StoreObjectFieldNoWriteBarrier(copy, JSObject::kPropertiesOrHashOffset,
                                    var_properties.value());
     StoreObjectFieldNoWriteBarrier(copy, JSObject::kElementsOffset,
                                    var_elements.value());
@@ -638,18 +710,8 @@ Node* ConstructorBuiltinsAssembler::EmitFastCloneShallowObject(
 
   // Initialize the AllocationMemento before potential GCs due to heap number
   // allocation when copying the in-object properties.
-  if (FLAG_allocation_site_pretenuring) {
-    Comment("Initialize AllocationMemento");
-    Node* memento = InnerAllocate(copy, instance_size);
-    StoreMapNoWriteBarrier(memento, Heap::kAllocationMementoMapRootIndex);
-    StoreObjectFieldNoWriteBarrier(
-        memento, AllocationMemento::kAllocationSiteOffset, allocation_site);
-    Node* memento_create_count = LoadObjectField(
-        allocation_site, AllocationSite::kPretenureCreateCountOffset);
-    memento_create_count = SmiAdd(memento_create_count, SmiConstant(1));
-    StoreObjectFieldNoWriteBarrier(allocation_site,
-                                   AllocationSite::kPretenureCreateCountOffset,
-                                   memento_create_count);
+  if (needs_allocation_memento) {
+    InitializeAllocationMemento(copy, instance_size, allocation_site);
   }
 
   {

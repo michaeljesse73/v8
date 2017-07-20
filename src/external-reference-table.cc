@@ -6,7 +6,6 @@
 
 #include "src/accessors.h"
 #include "src/assembler.h"
-#include "src/builtins/builtins.h"
 #include "src/counters.h"
 #include "src/deoptimizer.h"
 #include "src/ic/stub-cache.h"
@@ -289,9 +288,6 @@ void ExternalReferenceTable::AddReferences(Isolate* isolate) {
       "Isolate::stress_deopt_count_address()");
   Add(ExternalReference::runtime_function_table_address(isolate).address(),
       "Runtime::runtime_function_table_address()");
-  Add(ExternalReference::is_tail_call_elimination_enabled_address(isolate)
-          .address(),
-      "Isolate::is_tail_call_elimination_enabled_address()");
   Add(ExternalReference::address_of_float_abs_constant().address(),
       "float_absolute_constant");
   Add(ExternalReference::address_of_float_neg_constant().address(),
@@ -353,6 +349,12 @@ void ExternalReferenceTable::AddReferences(Isolate* isolate) {
       "StoreBuffer::StoreBufferOverflow");
 }
 
+#define BUILTIN_LIST_EXTERNAL_REFS(DEF) \
+  BUILTIN_LIST_C(DEF)                   \
+  BUILTIN_LIST_A(DEF)                   \
+  DEF(CallProxy)                        \
+  DEF(ConstructProxy)
+
 void ExternalReferenceTable::AddBuiltins(Isolate* isolate) {
   struct CBuiltinEntry {
     Address address;
@@ -374,13 +376,28 @@ void ExternalReferenceTable::AddBuiltins(Isolate* isolate) {
   };
   static const BuiltinEntry builtins[] = {
 #define DEF_ENTRY(Name, ...) {Builtins::k##Name, "Builtin_" #Name},
-      BUILTIN_LIST_C(DEF_ENTRY) BUILTIN_LIST_A(DEF_ENTRY)
+      BUILTIN_LIST_EXTERNAL_REFS(DEF_ENTRY)
 #undef DEF_ENTRY
   };
   for (unsigned i = 0; i < arraysize(builtins); ++i) {
     Add(isolate->builtins()->builtin_address(builtins[i].id), builtins[i].name);
   }
 }
+
+bool ExternalReferenceTable::HasBuiltin(Builtins::Name name) {
+  switch (name) {
+#define CASE_FOUND(Name)  \
+  case Builtins::k##Name: \
+    return true;
+    BUILTIN_LIST_EXTERNAL_REFS(CASE_FOUND)
+#undef CASE_FOUND
+    default:
+      return false;
+  }
+  UNREACHABLE();
+}
+
+#undef BUILTIN_LIST_EXTERNAL_REFS
 
 void ExternalReferenceTable::AddRuntimeFunctions(Isolate* isolate) {
   struct RuntimeEntry {

@@ -102,26 +102,32 @@ V8_INLINE Dest bit_cast(Source const& source) {
   return dest;
 }
 
+// Explicitly declare the assignment operator as deleted.
+#define DISALLOW_ASSIGN(TypeName) TypeName& operator=(const TypeName&) = delete;
 
-// Put this in the private: declarations for a class to be unassignable.
-#define DISALLOW_ASSIGN(TypeName) void operator=(const TypeName&)
-
-
-// A macro to disallow the evil copy constructor and operator= functions
-// This should be used in the private: declarations for a class
+// Explicitly declare the copy constructor and assignment operator as deleted.
 #define DISALLOW_COPY_AND_ASSIGN(TypeName) \
   TypeName(const TypeName&) = delete;      \
-  void operator=(const TypeName&) = delete
+  DISALLOW_ASSIGN(TypeName)
 
-
-// A macro to disallow all the implicit constructors, namely the
+// Explicitly declare all implicit constructors as deleted, namely the
 // default constructor, copy constructor and operator= functions.
-//
-// This should be used in the private: declarations for a class
-// that wants to prevent anyone from instantiating it. This is
-// especially useful for classes containing only static methods.
+// This is especially useful for classes containing only static methods.
 #define DISALLOW_IMPLICIT_CONSTRUCTORS(TypeName) \
   TypeName() = delete;                           \
+  DISALLOW_COPY_AND_ASSIGN(TypeName)
+
+// Disallow copying a type, but provide default construction, move construction
+// and move assignment. Especially useful for move-only structs.
+#define MOVE_ONLY_WITH_DEFAULT_CONSTRUCTORS(TypeName) \
+  TypeName() = default;                               \
+  MOVE_ONLY_NO_DEFAULT_CONSTRUCTOR(TypeName)
+
+// Disallow copying a type, and only provide move construction and move
+// assignment. Especially useful for move-only structs.
+#define MOVE_ONLY_NO_DEFAULT_CONSTRUCTOR(TypeName) \
+  TypeName(TypeName&&) = default;                  \
+  TypeName& operator=(TypeName&&) = default;       \
   DISALLOW_COPY_AND_ASSIGN(TypeName)
 
 // A macro to disallow the dynamic allocation.
@@ -188,14 +194,18 @@ V8_INLINE Dest bit_cast(Source const& source) {
 #define IS_TRIVIALLY_COPYABLE(T) std::is_trivially_copyable<T>::value
 #endif
 
-// The USE(x) template is used to silence C++ compiler warnings
+// The USE(x, ...) template is used to silence C++ compiler warnings
 // issued for (yet) unused variables (typically parameters).
-template <typename T>
-inline void USE(T) { }
-
-
-#define IS_POWER_OF_TWO(x) ((x) != 0 && (((x) & ((x) - 1)) == 0))
-
+// The arguments are guaranteed to be evaluated from left to right.
+struct Use {
+  template <typename T>
+  Use(T&&) {}  // NOLINT(runtime/explicit)
+};
+#define USE(...)                                         \
+  do {                                                   \
+    ::Use unused_tmp_array_for_use_macro[]{__VA_ARGS__}; \
+    (void)unused_tmp_array_for_use_macro;                \
+  } while (false)
 
 // Define our own macros for writing 64-bit constants.  This is less fragile
 // than defining __STDC_CONSTANT_MACROS before including <stdint.h>, and it
@@ -288,7 +298,8 @@ inline T AddressFrom(intptr_t x) {
 // Return the largest multiple of m which is <= x.
 template <typename T>
 inline T RoundDown(T x, intptr_t m) {
-  DCHECK(IS_POWER_OF_TWO(m));
+  // m must be a power of two.
+  DCHECK(m != 0 && ((m & (m - 1)) == 0));
   return AddressFrom<T>(OffsetFrom(x) & -m);
 }
 

@@ -388,7 +388,7 @@ void wasm::UpdateDispatchTables(Isolate* isolate,
       // a dangling pointer in the signature map.
       Handle<WasmInstanceObject> instance(
           WasmInstanceObject::cast(dispatch_tables->get(i)), isolate);
-      auto func_table = instance->module()->function_tables[table_index];
+      auto& func_table = instance->module()->function_tables[table_index];
       uint32_t sig_index = func_table.map.FindOrInsert(function->sig);
       signature_table->set(index, Smi::FromInt(static_cast<int>(sig_index)));
       function_table->set(index, *code);
@@ -904,9 +904,10 @@ Handle<Code> wasm::CompileLazy(Isolate* isolate) {
   if (it.frame()->is_js_to_wasm()) {
     DCHECK(!instance.is_null());
   } else if (instance.is_null()) {
+    // Then this is a direct call (otherwise we would have attached the instance
+    // via deopt data to the lazy compile stub). Just use the instance of the
+    // caller.
     instance = handle(wasm::GetOwningWasmInstance(*caller_code), isolate);
-  } else {
-    DCHECK(*instance == wasm::GetOwningWasmInstance(*caller_code));
   }
   int offset =
       static_cast<int>(it.frame()->pc() - caller_code->instruction_start());
@@ -989,7 +990,7 @@ void LazyCompilationOrchestrator::CompileFunction(
                                      CStrVector(func_name.c_str()), func_index,
                                      CEntryStub(isolate, 1).GetCode());
   unit.ExecuteCompilation();
-  Handle<Code> code = unit.FinishCompilation(&thrower);
+  MaybeHandle<Code> maybe_code = unit.FinishCompilation(&thrower);
 
   // If there is a pending error, something really went wrong. The module was
   // verified before starting execution with lazy compilation.
@@ -997,6 +998,7 @@ void LazyCompilationOrchestrator::CompileFunction(
   // TODO(clemensh): According to the spec, we can actually skip validation at
   // module creation time, and return a function that always traps here.
   CHECK(!thrower.error());
+  Handle<Code> code = maybe_code.ToHandleChecked();
 
   Handle<FixedArray> deopt_data = isolate->factory()->NewFixedArray(2, TENURED);
   Handle<WeakCell> weak_instance = isolate->factory()->NewWeakCell(instance);

@@ -112,9 +112,9 @@ declare_args() {
   v8_experimental_extra_library_files =
       [ "//test/cctest/test-experimental-extra.js" ]
 
-  v8_enable_gdbjit = ((v8_current_cpu == "x86" || v8_current_cpu == "x64" ||
-                       v8_current_cpu == "x87") && (is_linux || is_mac)) ||
-                     (v8_current_cpu == "ppc64" && is_linux)
+  v8_enable_gdbjit =
+      ((v8_current_cpu == "x86" || v8_current_cpu == "x64") &&
+       (is_linux || is_mac)) || (v8_current_cpu == "ppc64" && is_linux)
 
   # Temporary flag to allow embedders to update their microtasks scopes
   # while rolling in a new version of V8.
@@ -438,9 +438,6 @@ config("toolchain") {
       # ldflags are not pushed to dependants.
       ldflags += [ "/STACK:2097152" ]
     }
-  }
-  if (v8_current_cpu == "x87") {
-    defines += [ "V8_TARGET_ARCH_X87" ]
   }
   if (is_android && v8_android_log_stdout) {
     defines += [ "V8_ANDROID_LOG_STDOUT" ]
@@ -952,7 +949,6 @@ v8_source_set("v8_builtins_generators") {
     "src/builtins/builtins-constructor-gen.h",
     "src/builtins/builtins-constructor.h",
     "src/builtins/builtins-conversion-gen.cc",
-    "src/builtins/builtins-conversion-gen.h",
     "src/builtins/builtins-date-gen.cc",
     "src/builtins/builtins-debug-gen.cc",
     "src/builtins/builtins-forin-gen.cc",
@@ -1038,11 +1034,6 @@ v8_source_set("v8_builtins_generators") {
     sources += [
       ### gcmole(arch:s390) ###
       "src/builtins/s390/builtins-s390.cc",
-    ]
-  } else if (v8_current_cpu == "x87") {
-    sources += [
-      ### gcmole(arch:x87) ###
-      "src/builtins/x87/builtins-x87.cc",
     ]
   }
 
@@ -1152,6 +1143,7 @@ v8_source_set("v8_base") {
     "src/ast/ast-function-literal-id-reindexer.h",
     "src/ast/ast-numbering.cc",
     "src/ast/ast-numbering.h",
+    "src/ast/ast-source-ranges.h",
     "src/ast/ast-traversal-visitor.h",
     "src/ast/ast-value-factory.cc",
     "src/ast/ast-value-factory.h",
@@ -1207,6 +1199,7 @@ v8_source_set("v8_base") {
     "src/builtins/builtins-math.cc",
     "src/builtins/builtins-number.cc",
     "src/builtins/builtins-object.cc",
+    "src/builtins/builtins-promise.cc",
     "src/builtins/builtins-reflect.cc",
     "src/builtins/builtins-regexp.cc",
     "src/builtins/builtins-sharedarraybuffer.cc",
@@ -1275,8 +1268,6 @@ v8_source_set("v8_base") {
     "src/compiler/bytecode-liveness-map.cc",
     "src/compiler/bytecode-liveness-map.h",
     "src/compiler/c-linkage.cc",
-    "src/compiler/check-elimination.cc",
-    "src/compiler/check-elimination.h",
     "src/compiler/checkpoint-elimination.cc",
     "src/compiler/checkpoint-elimination.h",
     "src/compiler/code-assembler.cc",
@@ -1442,8 +1433,6 @@ v8_source_set("v8_base") {
     "src/compiler/state-values-utils.h",
     "src/compiler/store-store-elimination.cc",
     "src/compiler/store-store-elimination.h",
-    "src/compiler/tail-call-optimization.cc",
-    "src/compiler/tail-call-optimization.h",
     "src/compiler/type-cache.cc",
     "src/compiler/type-cache.h",
     "src/compiler/typed-optimization.cc",
@@ -1582,6 +1571,7 @@ v8_source_set("v8_base") {
     "src/heap/incremental-marking.cc",
     "src/heap/incremental-marking.h",
     "src/heap/item-parallel-job.h",
+    "src/heap/local-allocator.h",
     "src/heap/mark-compact-inl.h",
     "src/heap/mark-compact.cc",
     "src/heap/mark-compact.h",
@@ -2010,6 +2000,7 @@ v8_source_set("v8_base") {
     "src/wasm/wasm-result.h",
     "src/wasm/wasm-text.cc",
     "src/wasm/wasm-text.h",
+    "src/wasm/wasm-value.h",
     "src/zone/accounting-allocator.cc",
     "src/zone/accounting-allocator.h",
     "src/zone/zone-allocator.h",
@@ -2311,37 +2302,6 @@ v8_source_set("v8_base") {
       "src/s390/simulator-s390.cc",
       "src/s390/simulator-s390.h",
     ]
-  } else if (v8_current_cpu == "x87") {
-    sources += [  ### gcmole(arch:x87) ###
-      "src/compiler/x87/code-generator-x87.cc",
-      "src/compiler/x87/instruction-codes-x87.h",
-      "src/compiler/x87/instruction-scheduler-x87.cc",
-      "src/compiler/x87/instruction-selector-x87.cc",
-      "src/debug/x87/debug-x87.cc",
-      "src/full-codegen/x87/full-codegen-x87.cc",
-      "src/ic/x87/access-compiler-x87.cc",
-      "src/ic/x87/handler-compiler-x87.cc",
-      "src/ic/x87/ic-x87.cc",
-      "src/regexp/x87/regexp-macro-assembler-x87.cc",
-      "src/regexp/x87/regexp-macro-assembler-x87.h",
-      "src/x87/assembler-x87-inl.h",
-      "src/x87/assembler-x87.cc",
-      "src/x87/assembler-x87.h",
-      "src/x87/code-stubs-x87.cc",
-      "src/x87/code-stubs-x87.h",
-      "src/x87/codegen-x87.cc",
-      "src/x87/codegen-x87.h",
-      "src/x87/cpu-x87.cc",
-      "src/x87/deoptimizer-x87.cc",
-      "src/x87/disasm-x87.cc",
-      "src/x87/frames-x87.cc",
-      "src/x87/frames-x87.h",
-      "src/x87/interface-descriptors-x87.cc",
-      "src/x87/macro-assembler-x87.cc",
-      "src/x87/macro-assembler-x87.h",
-      "src/x87/simulator-x87.cc",
-      "src/x87/simulator-x87.h",
-    ]
   }
 
   configs = [ ":internal_config" ]
@@ -2454,6 +2414,8 @@ v8_component("v8_libbase") {
 
   if (is_posix) {
     sources += [
+      "src/base/platform/platform-posix-time.cc",
+      "src/base/platform/platform-posix-time.h",
       "src/base/platform/platform-posix.cc",
       "src/base/platform/platform-posix.h",
     ]

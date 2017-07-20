@@ -84,7 +84,7 @@ int32_t CompileAndRunAsmWasmModule(Isolate* isolate, const byte* module_start,
 int32_t InterpretWasmModule(Isolate* isolate,
                             Handle<WasmInstanceObject> instance,
                             ErrorThrower* thrower, int32_t function_index,
-                            WasmVal* args, bool* possible_nondeterminism) {
+                            WasmValue* args, bool* possible_nondeterminism) {
   // Don't execute more than 16k steps.
   constexpr int kMaxNumSteps = 16 * 1024;
 
@@ -93,6 +93,7 @@ int32_t InterpretWasmModule(Isolate* isolate,
 
   WasmInterpreter* interpreter =
       WasmDebugInfo::SetupForTesting(instance, nullptr);
+  WasmInterpreter::HeapObjectsScope heap_objects_scope(interpreter, instance);
   WasmInterpreter::Thread* thread = interpreter->GetThread(0);
   thread->Reset();
   thread->InitFrame(&(instance->module()->functions[function_index]), args);
@@ -100,7 +101,7 @@ int32_t InterpretWasmModule(Isolate* isolate,
 
   *possible_nondeterminism = thread->PossibleNondeterminism();
   if (interpreter_result == WasmInterpreter::FINISHED) {
-    WasmVal val = thread->GetReturnValue();
+    WasmValue val = thread->GetReturnValue();
     return val.to<int32_t>();
   } else if (thread->state() == WasmInterpreter::TRAPPED) {
     return 0xdeadbeef;

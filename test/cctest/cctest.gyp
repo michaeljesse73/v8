@@ -45,6 +45,7 @@
       'compiler/test-run-unwinding-info.cc',
       'compiler/test-gap-resolver.cc',
       'compiler/test-graph-visualizer.cc',
+      'compiler/test-code-generator.cc',
       'compiler/test-code-assembler.cc',
       'compiler/test-instruction.cc',
       'compiler/test-js-context-specialization.cc',
@@ -308,16 +309,6 @@
       'test-disasm-mips64.cc',
       'test-macro-assembler-mips64.cc',
     ],
-    'cctest_sources_x87': [  ### gcmole(arch:x87) ###
-      'test-assembler-x87.cc',
-      'test-code-stubs.cc',
-      'test-code-stubs.h',
-      'test-code-stubs-x87.cc',
-      'test-disasm-x87.cc',
-      'test-macro-assembler-x87.cc',
-      'test-log-stack-tracer.cc',
-      'test-run-wasm-relocation-x87.cc',
-    ],
   },
   'includes': ['../../gypfiles/toolchain.gypi', '../../gypfiles/features.gypi'],
   'targets': [
@@ -400,11 +391,6 @@
         ['v8_target_arch=="mips64el"', {
           'sources': [
             '<@(cctest_sources_mips64el)',
-          ],
-        }],
-        ['v8_target_arch=="x87"', {
-          'sources': [
-            '<@(cctest_sources_x87)',
           ],
         }],
         [ 'OS=="linux" or OS=="qnx"', {

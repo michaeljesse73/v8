@@ -25,7 +25,7 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Flags: --allow-natives-syntax --use-escape-analysis --expose-gc
+// Flags: --allow-natives-syntax --expose-gc
 
 
 // Simple test of capture
@@ -113,15 +113,11 @@
     assertEquals(3, l.y.z)
   }
 
-  f();
-  f();
-  f();
+  f(); f(); f();
   %OptimizeFunctionOnNextCall(f);
-  f();
-  f();
+  f(); f();
   %OptimizeFunctionOnNextCall(f);
-  f();
-  f();
+  f(); f();
 })();
 
 

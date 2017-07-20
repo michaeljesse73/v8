@@ -439,11 +439,6 @@ class V8_EXPORT_PRIVATE CodeStubAssembler : public compiler::CodeAssembler {
   Node* LoadWeakCellValueUnchecked(Node* weak_cell);
   Node* LoadWeakCellValue(Node* weak_cell, Label* if_cleared = nullptr);
 
-  // Get the offset of an element in a fixed array.
-  Node* GetFixedArrayElementOffset(
-      Node* index_node, int additional_offset = 0,
-      ParameterMode parameter_mode = INTPTR_PARAMETERS);
-
   // Load an array element from a FixedArray.
   Node* LoadFixedArrayElement(Node* object, Node* index,
                               int additional_offset = 0,
@@ -487,6 +482,7 @@ class V8_EXPORT_PRIVATE CodeStubAssembler : public compiler::CodeAssembler {
   Node* LoadNativeContext(Node* context);
 
   Node* LoadJSArrayElementsMap(ElementsKind kind, Node* native_context);
+  Node* LoadJSArrayElementsMap(Node* kind, Node* native_context);
 
   // Load the "prototype" property of a JSFunction.
   Node* LoadJSFunctionPrototype(Node* function, Label* if_bailout);
@@ -742,7 +738,7 @@ class V8_EXPORT_PRIVATE CodeStubAssembler : public compiler::CodeAssembler {
 
   // Allocation site manipulation
   void InitializeAllocationMemento(Node* base_allocation,
-                                   int base_allocation_size,
+                                   Node* base_allocation_size,
                                    Node* allocation_site);
 
   Node* TryTaggedToFloat64(Node* value, Label* if_valueisnotnumber);
@@ -825,6 +821,7 @@ class V8_EXPORT_PRIVATE CodeStubAssembler : public compiler::CodeAssembler {
   Node* IsJSReceiverInstanceType(Node* instance_type);
   Node* IsJSReceiverMap(Node* map);
   Node* IsJSReceiver(Node* object);
+  Node* IsNullOrJSReceiver(Node* object);
   Node* IsJSRegExp(Node* object);
   Node* IsJSTypedArray(Node* object);
   Node* IsJSValueInstanceType(Node* instance_type);
@@ -1220,6 +1217,9 @@ class V8_EXPORT_PRIVATE CodeStubAssembler : public compiler::CodeAssembler {
                     name);
   }
 
+  Node* GetMethod(Node* context, Node* object, Handle<Name> name,
+                  Label* if_null_or_undefined);
+
   template <class... TArgs>
   Node* CallBuiltin(Builtins::Name id, Node* context, TArgs... args) {
     return CallStub(Builtins::CallableFor(isolate(), id), context, args...);
@@ -1296,6 +1296,10 @@ class V8_EXPORT_PRIVATE CodeStubAssembler : public compiler::CodeAssembler {
 
   // Load type feedback vector from the stub caller's frame.
   Node* LoadFeedbackVectorForStub();
+
+  Node* LoadFeedbackVector(Node* closure);
+  Node* LoadFeedbackVectorSlot(Node* closure, Node* smi_index);
+  void StoreFeedbackVectorSlot(Node* closure, Node* smi_index, Node* value);
 
   // Update the type feedback vector.
   void UpdateFeedback(Node* feedback, Node* feedback_vector, Node* slot_id,

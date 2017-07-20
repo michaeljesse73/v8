@@ -187,7 +187,6 @@
         'builtins/builtins-constructor-gen.h',
         'builtins/builtins-constructor.h',
         'builtins/builtins-conversion-gen.cc',
-        'builtins/builtins-conversion-gen.h',
         'builtins/builtins-date-gen.cc',
         'builtins/builtins-debug-gen.cc',
         'builtins/builtins-forin-gen.cc',
@@ -277,11 +276,6 @@
         ['v8_target_arch=="s390" or v8_target_arch=="s390x"', {
           'sources': [  ### gcmole(arch:s390) ###
             'builtins/s390/builtins-s390.cc',
-          ],
-        }],
-        ['v8_target_arch=="x87"', {
-          'sources': [  ### gcmole(arch:x87) ###
-            'builtins/x87/builtins-x87.cc',
           ],
         }],
         ['v8_enable_i18n_support==0', {
@@ -593,6 +587,7 @@
         'ast/ast-function-literal-id-reindexer.h',
         'ast/ast-numbering.cc',
         'ast/ast-numbering.h',
+        'ast/ast-source-ranges.h',
         'ast/ast-traversal-visitor.h',
         'ast/ast-value-factory.cc',
         'ast/ast-value-factory.h',
@@ -646,6 +641,7 @@
         'builtins/builtins-math.cc',
         'builtins/builtins-number.cc',
         'builtins/builtins-object.cc',
+        'builtins/builtins-promise.cc',
         'builtins/builtins-reflect.cc',
         'builtins/builtins-regexp.cc',
         'builtins/builtins-sharedarraybuffer.cc',
@@ -706,8 +702,6 @@
         'compiler/bytecode-liveness-map.cc',
         'compiler/bytecode-liveness-map.h',
         'compiler/c-linkage.cc',
-        'compiler/check-elimination.cc',
-        'compiler/check-elimination.h',
         'compiler/checkpoint-elimination.cc',
         'compiler/checkpoint-elimination.h',
         'compiler/code-generator-impl.h',
@@ -873,8 +867,6 @@
         'compiler/state-values-utils.h',
         'compiler/store-store-elimination.cc',
         'compiler/store-store-elimination.h',
-        'compiler/tail-call-optimization.cc',
-        'compiler/tail-call-optimization.h',
         'compiler/types.cc',
         'compiler/types.h',
         'compiler/type-cache.cc',
@@ -1025,6 +1017,7 @@
         'heap/incremental-marking.cc',
         'heap/incremental-marking.h',
         'heap/item-parallel-job.h',
+        'heap/local-allocator.h',
         'heap/mark-compact-inl.h',
         'heap/mark-compact.cc',
         'heap/mark-compact.h',
@@ -1451,6 +1444,7 @@
         'wasm/wasm-result.h',
         'wasm/wasm-text.cc',
         'wasm/wasm-text.h',
+        'wasm/wasm-value.h',
         'zone/accounting-allocator.cc',
         'zone/accounting-allocator.h',
         'zone/zone-segment.cc',
@@ -1588,38 +1582,6 @@
             'ic/ia32/ic-ia32.cc',
             'regexp/ia32/regexp-macro-assembler-ia32.cc',
             'regexp/ia32/regexp-macro-assembler-ia32.h',
-          ],
-        }],
-        ['v8_target_arch=="x87"', {
-          'sources': [  ### gcmole(arch:x87) ###
-            'x87/assembler-x87-inl.h',
-            'x87/assembler-x87.cc',
-            'x87/assembler-x87.h',
-            'x87/code-stubs-x87.cc',
-            'x87/code-stubs-x87.h',
-            'x87/codegen-x87.cc',
-            'x87/codegen-x87.h',
-            'x87/cpu-x87.cc',
-            'x87/deoptimizer-x87.cc',
-            'x87/disasm-x87.cc',
-            'x87/frames-x87.cc',
-            'x87/frames-x87.h',
-            'x87/interface-descriptors-x87.cc',
-            'x87/macro-assembler-x87.cc',
-            'x87/macro-assembler-x87.h',
-            'x87/simulator-x87.cc',
-            'x87/simulator-x87.h',
-            'compiler/x87/code-generator-x87.cc',
-            'compiler/x87/instruction-codes-x87.h',
-            'compiler/x87/instruction-scheduler-x87.cc',
-            'compiler/x87/instruction-selector-x87.cc',
-            'debug/x87/debug-x87.cc',
-            'full-codegen/x87/full-codegen-x87.cc',
-            'ic/x87/access-compiler-x87.cc',
-            'ic/x87/handler-compiler-x87.cc',
-            'ic/x87/ic-x87.cc',
-            'regexp/x87/regexp-macro-assembler-x87.cc',
-            'regexp/x87/regexp-macro-assembler-x87.h',
           ],
         }],
         ['v8_target_arch=="mips" or v8_target_arch=="mipsel"', {
@@ -1969,6 +1931,8 @@
               'base/platform/platform-linux.cc',
               'base/platform/platform-posix.h',
               'base/platform/platform-posix.cc',
+              'base/platform/platform-posix-time.h',
+              'base/platform/platform-posix-time.cc',
             ],
           }
         ],
@@ -1977,6 +1941,8 @@
               'base/debug/stack_trace_android.cc',
               'base/platform/platform-posix.h',
               'base/platform/platform-posix.cc',
+              'base/platform/platform-posix-time.h',
+              'base/platform/platform-posix-time.cc',
             ],
             'link_settings': {
               'target_conditions': [
@@ -2033,6 +1999,8 @@
               'base/debug/stack_trace_posix.cc',
               'base/platform/platform-posix.h',
               'base/platform/platform-posix.cc',
+              'base/platform/platform-posix-time.h',
+              'base/platform/platform-posix-time.cc',
               'base/qnx-math.h'
             ],
             'target_conditions': [
@@ -2064,6 +2032,8 @@
               'base/platform/platform-freebsd.cc',
               'base/platform/platform-posix.h',
               'base/platform/platform-posix.cc',
+              'base/platform/platform-posix-time.h',
+              'base/platform/platform-posix-time.cc',
             ],
           }
         ],
@@ -2076,6 +2046,8 @@
               'base/platform/platform-openbsd.cc',
               'base/platform/platform-posix.h',
               'base/platform/platform-posix.cc'
+              'base/platform/platform-posix-time.h',
+              'base/platform/platform-posix-time.cc',
             ],
           }
         ],
@@ -2089,6 +2061,8 @@
               'base/platform/platform-openbsd.cc',
               'base/platform/platform-posix.h',
               'base/platform/platform-posix.cc',
+              'base/platform/platform-posix-time.h',
+              'base/platform/platform-posix-time.cc',
             ],
           }
         ],
@@ -2125,6 +2099,8 @@
             'base/platform/platform-macos.cc',
             'base/platform/platform-posix.h',
             'base/platform/platform-posix.cc',
+            'base/platform/platform-posix-time.h',
+            'base/platform/platform-posix-time.cc',
           ]},
         ],
         ['OS=="win"', {

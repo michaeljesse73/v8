@@ -4284,11 +4284,11 @@ class V8_EXPORT ArrayBuffer : public Object {
   class V8_EXPORT Contents { // NOLINT
    public:
     Contents()
-        : allocation_base_(nullptr),
+        : data_(nullptr),
+          byte_length_(0),
+          allocation_base_(nullptr),
           allocation_length_(0),
-          allocation_mode_(Allocator::AllocationMode::kNormal),
-          data_(nullptr),
-          byte_length_(0) {}
+          allocation_mode_(Allocator::AllocationMode::kNormal) {}
 
     void* AllocationBase() const { return allocation_base_; }
     size_t AllocationLength() const { return allocation_length_; }
@@ -4300,11 +4300,11 @@ class V8_EXPORT ArrayBuffer : public Object {
     size_t ByteLength() const { return byte_length_; }
 
    private:
+    void* data_;
+    size_t byte_length_;
     void* allocation_base_;
     size_t allocation_length_;
     Allocator::AllocationMode allocation_mode_;
-    void* data_;
-    size_t byte_length_;
 
     friend class ArrayBuffer;
   };
@@ -4654,11 +4654,11 @@ class V8_EXPORT SharedArrayBuffer : public Object {
   class V8_EXPORT Contents {  // NOLINT
    public:
     Contents()
-        : allocation_base_(nullptr),
+        : data_(nullptr),
+          byte_length_(0),
+          allocation_base_(nullptr),
           allocation_length_(0),
-          allocation_mode_(ArrayBuffer::Allocator::AllocationMode::kNormal),
-          data_(nullptr),
-          byte_length_(0) {}
+          allocation_mode_(ArrayBuffer::Allocator::AllocationMode::kNormal) {}
 
     void* AllocationBase() const { return allocation_base_; }
     size_t AllocationLength() const { return allocation_length_; }
@@ -4670,11 +4670,11 @@ class V8_EXPORT SharedArrayBuffer : public Object {
     size_t ByteLength() const { return byte_length_; }
 
    private:
+    void* data_;
+    size_t byte_length_;
     void* allocation_base_;
     size_t allocation_length_;
     ArrayBuffer::Allocator::AllocationMode allocation_mode_;
-    void* data_;
-    size_t byte_length_;
 
     friend class SharedArrayBuffer;
   };
@@ -5986,6 +5986,8 @@ V8_INLINE Local<Boolean> False(Isolate* isolate);
  *
  * The arguments for set_max_semi_space_size, set_max_old_space_size,
  * set_max_executable_size, set_code_range_size specify limits in MB.
+ *
+ * The argument for set_max_semi_space_size_in_kb is in KB.
  */
 class V8_EXPORT ResourceConstraints {
  public:
@@ -6003,10 +6005,28 @@ class V8_EXPORT ResourceConstraints {
   void ConfigureDefaults(uint64_t physical_memory,
                          uint64_t virtual_memory_limit);
 
-  int max_semi_space_size() const { return max_semi_space_size_; }
-  void set_max_semi_space_size(int limit_in_mb) {
-    max_semi_space_size_ = limit_in_mb;
+  // Returns the max semi-space size in MB.
+  V8_DEPRECATE_SOON("Use max_semi_space_size_in_kb()",
+                    int max_semi_space_size()) {
+    return static_cast<int>(max_semi_space_size_in_kb_ / 1024);
   }
+
+  // Sets the max semi-space size in MB.
+  V8_DEPRECATE_SOON("Use set_max_semi_space_size_in_kb(size_t limit_in_kb)",
+                    void set_max_semi_space_size(int limit_in_mb)) {
+    max_semi_space_size_in_kb_ = limit_in_mb * 1024;
+  }
+
+  // Returns the max semi-space size in KB.
+  size_t max_semi_space_size_in_kb() const {
+    return max_semi_space_size_in_kb_;
+  }
+
+  // Sets the max semi-space size in KB.
+  void set_max_semi_space_size_in_kb(size_t limit_in_kb) {
+    max_semi_space_size_in_kb_ = limit_in_kb;
+  }
+
   int max_old_space_size() const { return max_old_space_size_; }
   void set_max_old_space_size(int limit_in_mb) {
     max_old_space_size_ = limit_in_mb;
@@ -6032,7 +6052,10 @@ class V8_EXPORT ResourceConstraints {
   }
 
  private:
-  int max_semi_space_size_;
+  // max_semi_space_size_ is in KB
+  size_t max_semi_space_size_in_kb_;
+
+  // The remaining limits are in MB
   int max_old_space_size_;
   int max_executable_size_;
   uint32_t* stack_limit_;
@@ -6135,7 +6158,7 @@ typedef void (*DeprecatedCallCompletedCallback)();
  * namespace object. In case of an exception, the embedder must reject
  * this promise with the exception.
  */
-typedef Local<Promise> (*HostImportModuleDynamicallyCallback)(
+typedef MaybeLocal<Promise> (*HostImportModuleDynamicallyCallback)(
     Local<Context> context, Local<String> referrer, Local<String> specifier);
 
 /**
@@ -8930,8 +8953,8 @@ class Internals {
   static const int kNodeIsIndependentShift = 3;
   static const int kNodeIsActiveShift = 4;
 
-  static const int kJSApiObjectType = 0xbd;
-  static const int kJSObjectType = 0xbe;
+  static const int kJSApiObjectType = 0xbb;
+  static const int kJSObjectType = 0xbc;
   static const int kFirstNonstringType = 0x80;
   static const int kOddballType = 0x82;
   static const int kForeignType = 0x86;

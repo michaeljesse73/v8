@@ -3993,6 +3993,15 @@ THREADED_TEST(External) {
   *ptr = 10;
   CHECK_EQ(x, 10);
 
+  {
+    i::Handle<i::Object> obj = v8::Utils::OpenHandle(*ext);
+    CHECK_EQ(i::HeapObject::cast(*obj)->map(), CcTest::heap()->external_map());
+    CHECK(ext->IsExternal());
+    CHECK(!CompileRun("new Set().add(this.ext)").IsEmpty());
+    CHECK_NE(i::HeapObject::cast(*obj)->map(), CcTest::heap()->external_map());
+    CHECK(ext->IsExternal());
+  }
+
   // Make sure unaligned pointers are wrapped properly.
   char* data = i::StrDup("0123456789");
   Local<v8::Value> zero = v8::External::New(CcTest::isolate(), &data[0]);
@@ -13826,7 +13835,7 @@ static int GetGlobalObjectsCount() {
     if (object->IsJSGlobalObject()) {
       i::JSGlobalObject* g = i::JSGlobalObject::cast(object);
       // Skip dummy global object.
-      if (i::GlobalDictionary::cast(g->properties())->NumberOfElements() != 0) {
+      if (g->global_dictionary()->NumberOfElements() != 0) {
         count++;
       }
     }
@@ -14442,7 +14451,6 @@ TEST(SetFunctionEntryHook) {
   // only gets called from experimental natives) is compiled with entry hooks.
   i::FLAG_allow_natives_syntax = true;
   i::FLAG_turbo_inlining = false;
-  i::FLAG_use_inlining = false;
 
   SetFunctionEntryHookTest test;
   test.RunTest();
@@ -20317,7 +20325,7 @@ class InitDefaultIsolateThread : public v8::base::Thread {
     create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
     switch (testCase_) {
       case SetResourceConstraints: {
-        create_params.constraints.set_max_semi_space_size(1);
+        create_params.constraints.set_max_semi_space_size_in_kb(1024);
         create_params.constraints.set_max_old_space_size(6);
         break;
       }
@@ -22061,7 +22069,7 @@ void TestStubCache(bool primary) {
   // The test does not work with interpreter because bytecode handlers taken
   // from the snapshot already refer to ICs with disabled counters and there
   // is no way to trigger bytecode handlers recompilation.
-  if (FLAG_ignition) return;
+  if (!FLAG_stress_fullcodegen) return;
 
   FLAG_native_code_counters = true;
   if (primary) {
@@ -23016,7 +23024,7 @@ TEST(AccessCheckInIC) {
   // The test does not work with interpreter because bytecode handlers taken
   // from the snapshot already refer to ICs with disabled counters and there
   // is no way to trigger bytecode handlers recompilation.
-  if (FLAG_ignition) return;
+  if (!FLAG_stress_fullcodegen) return;
 
   FLAG_native_code_counters = true;
   FLAG_opt = false;
@@ -25348,11 +25356,11 @@ TEST(StringConcatOverflow) {
 
 
 TEST(TurboAsmDisablesNeuter) {
+  i::FLAG_opt = true;
   i::FLAG_allow_natives_syntax = true;
   v8::V8::Initialize();
   v8::HandleScope scope(CcTest::isolate());
   LocalContext context;
-  bool should_be_neuterable = !i::FLAG_turbo_asm;
   const char* load =
       "function Module(stdlib, foreign, heap) {"
       "  'use asm';"
@@ -25367,7 +25375,7 @@ TEST(TurboAsmDisablesNeuter) {
       "buffer";
 
   v8::Local<v8::ArrayBuffer> result = CompileRun(load).As<v8::ArrayBuffer>();
-  CHECK_EQ(should_be_neuterable, result->IsNeuterable());
+  CHECK(!result->IsNeuterable());
 
   const char* store =
       "function Module(stdlib, foreign, heap) {"
@@ -25383,7 +25391,7 @@ TEST(TurboAsmDisablesNeuter) {
       "buffer";
 
   result = CompileRun(store).As<v8::ArrayBuffer>();
-  CHECK_EQ(should_be_neuterable, result->IsNeuterable());
+  CHECK(!result->IsNeuterable());
 }
 
 
@@ -26888,7 +26896,7 @@ TEST(CorrectEnteredContext) {
   object->ToString(currentContext.local()).ToLocalChecked();
 }
 
-Local<v8::Promise> HostImportModuleDynamicallyCallbackResolve(
+v8::MaybeLocal<v8::Promise> HostImportModuleDynamicallyCallbackResolve(
     Local<Context> context, Local<String> referrer, Local<String> specifier) {
   CHECK(!referrer.IsEmpty());
   String::Utf8Value referrer_utf8(referrer);

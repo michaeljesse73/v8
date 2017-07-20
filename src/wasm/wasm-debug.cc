@@ -40,8 +40,8 @@ Handle<String> PrintFToOneByteString(Isolate* isolate, const char* format,
              : isolate->factory()->NewStringFromOneByte(name).ToHandleChecked();
 }
 
-Handle<Object> WasmValToValueObject(Isolate* isolate, WasmVal value) {
-  switch (value.type) {
+Handle<Object> WasmValueToValueObject(Isolate* isolate, WasmValue value) {
+  switch (value.type()) {
     case kWasmI32:
       if (Smi::IsValid(value.to<int32_t>()))
         return handle(Smi::FromInt(value.to<int32_t>()), isolate);
@@ -94,6 +94,8 @@ class InterpreterHandle;
 InterpreterHandle* GetInterpreterHandle(WasmDebugInfo* debug_info);
 
 class InterpreterHandle {
+  MOVE_ONLY_NO_DEFAULT_CONSTRUCTOR(InterpreterHandle);
+
   WasmInstance instance_;
   WasmInterpreter interpreter_;
   Isolate* isolate_;
@@ -144,9 +146,6 @@ class InterpreterHandle {
 
     WasmInstanceObject* instance = debug_info->wasm_instance();
 
-    // Store a global handle to the wasm instance in the interpreter.
-    interpreter_.SetInstanceObject(instance);
-
     // Set memory start pointer and size.
     instance_.mem_start = nullptr;
     instance_.mem_size = 0;
@@ -172,7 +171,7 @@ class InterpreterHandle {
     SeqOneByteString* bytes_str =
         debug_info->wasm_instance()->compiled_module()->module_bytes();
     Vector<const byte> bytes(bytes_str->GetChars(), bytes_str->length());
-    return ModuleBytesEnv(instance->module, instance, bytes);
+    return {instance->module, instance, bytes};
   }
 
   WasmInterpreter* interpreter() { return &interpreter_; }
@@ -193,20 +192,21 @@ class InterpreterHandle {
   // Returns true if exited regularly, false if a trap/exception occured and was
   // not handled inside this activation. In the latter case, a pending exception
   // will have been set on the isolate.
-  bool Execute(Address frame_pointer, uint32_t func_index,
+  bool Execute(Handle<WasmInstanceObject> instance_object,
+               Address frame_pointer, uint32_t func_index,
                uint8_t* arg_buffer) {
     DCHECK_GE(module()->functions.size(), func_index);
     FunctionSig* sig = module()->functions[func_index].sig;
     DCHECK_GE(kMaxInt, sig->parameter_count());
     int num_params = static_cast<int>(sig->parameter_count());
-    ScopedVector<WasmVal> wasm_args(num_params);
+    ScopedVector<WasmValue> wasm_args(num_params);
     uint8_t* arg_buf_ptr = arg_buffer;
     for (int i = 0; i < num_params; ++i) {
       uint32_t param_size = 1 << ElementSizeLog2Of(sig->GetParam(i));
-#define CASE_ARG_TYPE(type, ctype)                                  \
-  case type:                                                        \
-    DCHECK_EQ(param_size, sizeof(ctype));                           \
-    wasm_args[i] = WasmVal(ReadUnalignedValue<ctype>(arg_buf_ptr)); \
+#define CASE_ARG_TYPE(type, ctype)                                    \
+  case type:                                                          \
+    DCHECK_EQ(param_size, sizeof(ctype));                             \
+    wasm_args[i] = WasmValue(ReadUnalignedValue<ctype>(arg_buf_ptr)); \
     break;
       switch (sig->GetParam(i)) {
         CASE_ARG_TYPE(kWasmI32, uint32_t)
@@ -222,6 +222,8 @@ class InterpreterHandle {
 
     uint32_t activation_id = StartActivation(frame_pointer);
 
+    WasmInterpreter::HeapObjectsScope heap_objects_scope(&interpreter_,
+                                                         instance_object);
     WasmInterpreter::Thread* thread = interpreter_.GetThread(0);
     thread->InitFrame(&module()->functions[func_index], wasm_args.start());
     bool finished = false;
@@ -264,7 +266,7 @@ class InterpreterHandle {
     // TODO(wasm): Handle multi-value returns.
     DCHECK_EQ(1, kV8MaxWasmFunctionReturns);
     if (sig->return_count()) {
-      WasmVal ret_val = thread->GetReturnValue(0);
+      WasmValue ret_val = thread->GetReturnValue(0);
 #define CASE_RET_TYPE(type, ctype)                                       \
   case type:                                                             \
     DCHECK_EQ(1 << ElementSizeLog2Of(sig->GetReturn(0)), sizeof(ctype)); \
@@ -498,8 +500,8 @@ class InterpreterHandle {
           const char* label = i < num_params ? "arg#%d" : "local#%d";
           name = PrintFToOneByteString<true>(isolate_, label, i);
         }
-        WasmVal value = frame->GetLocalValue(i);
-        Handle<Object> value_obj = WasmValToValueObject(isolate_, value);
+        WasmValue value = frame->GetLocalValue(i);
+        Handle<Object> value_obj = WasmValueToValueObject(isolate_, value);
         JSObject::SetOwnPropertyIgnoreAttributes(
             locals_obj, name.ToHandleChecked(), value_obj, NONE)
             .Assert();
@@ -519,8 +521,8 @@ class InterpreterHandle {
                                              stack_obj, NONE)
         .Assert();
     for (int i = 0; i < stack_count; ++i) {
-      WasmVal value = frame->GetStackValue(i);
-      Handle<Object> value_obj = WasmValToValueObject(isolate_, value);
+      WasmValue value = frame->GetStackValue(i);
+      Handle<Object> value_obj = WasmValueToValueObject(isolate_, value);
       JSObject::SetOwnElementIgnoreAttributes(
           stack_obj, static_cast<uint32_t>(i), value_obj, NONE)
           .Assert();
@@ -705,8 +707,9 @@ void WasmDebugInfo::PrepareStep(StepAction step_action) {
 bool WasmDebugInfo::RunInterpreter(Address frame_pointer, int func_index,
                                    uint8_t* arg_buffer) {
   DCHECK_LE(0, func_index);
+  Handle<WasmInstanceObject> instance(wasm_instance());
   return GetInterpreterHandle(this)->Execute(
-      frame_pointer, static_cast<uint32_t>(func_index), arg_buffer);
+      instance, frame_pointer, static_cast<uint32_t>(func_index), arg_buffer);
 }
 
 std::vector<std::pair<uint32_t, int>> WasmDebugInfo::GetInterpretedStack(

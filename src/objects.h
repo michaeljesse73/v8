@@ -249,9 +249,10 @@ enum TransitionFlag {
 enum SimpleTransitionFlag {
   SIMPLE_PROPERTY_TRANSITION,
   PROPERTY_TRANSITION,
-  SPECIAL_TRANSITION
+  // Below are the special transitions.
+  SPECIAL_TRANSITION,
+  SPECIAL_SHORTCUT_TRANSITION
 };
-
 
 // Indicates whether we are only interested in the descriptors of a particular
 // map, or in all descriptors in the descriptor array.
@@ -376,10 +377,6 @@ const int kStubMinorKeyBits = kSmiValueSize - kStubMajorKeyBits - 1;
   V(PROPERTY_CELL_TYPE)                                                        \
   V(SMALL_ORDERED_HASH_MAP_TYPE)                                               \
   V(SMALL_ORDERED_HASH_SET_TYPE)                                               \
-  /* TODO(yangguo): these padding types are for ABI stability. Remove after*/  \
-  /* version 6.0 branch, or replace them when there is demand for new types.*/ \
-  V(PADDING_TYPE_1)                                                            \
-  V(PADDING_TYPE_2)                                                            \
                                                                                \
   V(JS_PROXY_TYPE)                                                             \
   V(JS_GLOBAL_OBJECT_TYPE)                                                     \
@@ -729,11 +726,6 @@ enum InstanceType : uint8_t {
   SMALL_ORDERED_HASH_MAP_TYPE,
   SMALL_ORDERED_HASH_SET_TYPE,
 
-  // TODO(yangguo): these padding types are for ABI stability. Remove after
-  // version 6.0 branch, or replace them when there is demand for new types.
-  PADDING_TYPE_1,
-  PADDING_TYPE_2,
-
   // All the following types are subtypes of JSReceiver, which corresponds to
   // objects in the JS sense. The first and the last type in this range are
   // the two forms of function. This organization enables using the same
@@ -867,6 +859,12 @@ enum InstanceType : uint8_t {
 
   FIRST_ARRAY_ITERATOR_TYPE = FIRST_ARRAY_KEY_ITERATOR_TYPE,
   LAST_ARRAY_ITERATOR_TYPE = LAST_ARRAY_VALUE_ITERATOR_TYPE,
+
+  FIRST_SET_ITERATOR_TYPE = JS_SET_KEY_VALUE_ITERATOR_TYPE,
+  LAST_SET_ITERATOR_TYPE = JS_SET_VALUE_ITERATOR_TYPE,
+
+  FIRST_MAP_ITERATOR_TYPE = JS_MAP_KEY_ITERATOR_TYPE,
+  LAST_MAP_ITERATOR_TYPE = JS_MAP_VALUE_ITERATOR_TYPE,
 };
 
 STATIC_ASSERT(JS_OBJECT_TYPE == Internals::kJSObjectType);
@@ -1959,6 +1957,8 @@ class JSReceiver: public HeapObject {
   // Gets slow properties for non-global objects.
   inline NameDictionary* property_dictionary() const;
 
+  inline void SetProperties(HeapObject* properties);
+
   // There are four possible value for the properties offset.
   // 1) EmptyFixedArray -- This is the standard placeholder.
   //
@@ -1972,7 +1972,7 @@ class JSReceiver: public HeapObject {
   //
   // This is used only in the deoptimizer and heap. Please use the
   // above typed getters and setters to access the properties.
-  DECL_ACCESSORS(properties, Object)
+  DECL_ACCESSORS(raw_properties_or_hash, Object)
 
   inline void initialize_properties();
 
@@ -2155,7 +2155,7 @@ class JSReceiver: public HeapObject {
       Handle<JSReceiver> object, PropertyFilter filter);
 
   // Layout description.
-  static const int kPropertiesOffset = HeapObject::kHeaderSize;
+  static const int kPropertiesOrHashOffset = HeapObject::kHeaderSize;
   static const int kHeaderSize = HeapObject::kHeaderSize + kPointerSize;
 
   bool HasProxyInPrototype(Isolate* isolate);
@@ -4716,7 +4716,6 @@ class ContextExtension : public Struct {
   V(Set.prototype, entries, SetEntries)                     \
   V(Set.prototype, forEach, SetForEach)                     \
   V(Set.prototype, has, SetHas)                             \
-  V(Set.prototype, keys, SetKeys)                           \
   V(Set.prototype, values, SetValues)                       \
   V(WeakMap.prototype, delete, WeakMapDelete)               \
   V(WeakMap.prototype, has, WeakMapHas)                     \
@@ -4752,6 +4751,8 @@ enum BuiltinFunctionId {
   kArrayKeys,
   kArrayValues,
   kArrayIteratorNext,
+  kMapSize,
+  kSetSize,
   kMapIteratorNext,
   kSetIteratorNext,
   kDataViewBuffer,
@@ -4854,21 +4855,13 @@ class JSAsyncGeneratorObject : public JSGeneratorObject {
   // undefined.
   DECL_ACCESSORS(queue, HeapObject)
 
-  // [await_input_or_debug_pos]
-  // Holds the value to resume generator with after an Await(), in order to
-  // avoid clobbering function.sent. If awaited_promise is not undefined, holds
-  // current bytecode offset for debugging instead.
-  DECL_ACCESSORS(await_input_or_debug_pos, Object)
-
   // [awaited_promise]
   // A reference to the Promise of an AwaitExpression.
   DECL_ACCESSORS(awaited_promise, HeapObject)
 
   // Layout description.
   static const int kQueueOffset = JSGeneratorObject::kSize;
-  static const int kAwaitInputOrDebugPosOffset = kQueueOffset + kPointerSize;
-  static const int kAwaitedPromiseOffset =
-      kAwaitInputOrDebugPosOffset + kPointerSize;
+  static const int kAwaitedPromiseOffset = kQueueOffset + kPointerSize;
   static const int kSize = kAwaitedPromiseOffset + kPointerSize;
 
  private:
@@ -5278,9 +5271,10 @@ class JSFunction: public JSObject {
 
   // ES6 section 9.2.11 SetFunctionName
   // Because of the way this abstract operation is used in the spec,
-  // it should never fail.
-  static void SetName(Handle<JSFunction> function, Handle<Name> name,
-                      Handle<String> prefix);
+  // it should never fail, but in practice it will fail if the generated
+  // function name's length exceeds String::kMaxLength.
+  static MUST_USE_RESULT bool SetName(Handle<JSFunction> function,
+                                      Handle<Name> name, Handle<String> prefix);
 
   // The function's displayName if it is set, otherwise name if it is
   // configured, otherwise shared function info
@@ -6321,7 +6315,7 @@ class JSProxy: public JSReceiver {
   static const int kHashOffset = kHandlerOffset + kPointerSize;
   static const int kSize = kHashOffset + kPointerSize;
 
-  typedef FixedBodyDescriptor<JSReceiver::kPropertiesOffset, kSize, kSize>
+  typedef FixedBodyDescriptor<JSReceiver::kPropertiesOrHashOffset, kSize, kSize>
       BodyDescriptor;
   // No weak fields.
   typedef BodyDescriptor BodyDescriptorWeak;
@@ -7258,7 +7252,8 @@ class FunctionTemplateInfo: public TemplateInfo {
   static const int kSize = kCachedPropertyNameOffset + kPointerSize;
 
   static Handle<SharedFunctionInfo> GetOrCreateSharedFunctionInfo(
-      Isolate* isolate, Handle<FunctionTemplateInfo> info);
+      Isolate* isolate, Handle<FunctionTemplateInfo> info,
+      MaybeHandle<Name> maybe_name);
   // Returns parent function template or null.
   inline FunctionTemplateInfo* GetParent(Isolate* isolate);
   // Returns true if |object| is an instance of this function template.

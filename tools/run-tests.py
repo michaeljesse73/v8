@@ -131,11 +131,8 @@ VARIANT_ALIASES = {
   "extra": [],
 }
 
-DEBUG_FLAGS = ["--nohard-abort", "--nodead-code-elimination",
-               "--nofold-constants", "--enable-slow-asserts",
-               "--verify-heap"]
-RELEASE_FLAGS = ["--nohard-abort", "--nodead-code-elimination",
-                 "--nofold-constants"]
+DEBUG_FLAGS = ["--nohard-abort", "--enable-slow-asserts", "--verify-heap"]
+RELEASE_FLAGS = ["--nohard-abort"]
 
 MODES = {
   "debug": {
@@ -190,7 +187,6 @@ SUPPORTED_ARCHS = ["android_arm",
                    "android_x64",
                    "arm",
                    "ia32",
-                   "x87",
                    "mips",
                    "mipsel",
                    "mips64",
@@ -214,7 +210,6 @@ SLOW_ARCHS = ["android_arm",
               "mips64el",
               "s390",
               "s390x",
-              "x87",
               "arm64"]
 
 
@@ -836,6 +831,7 @@ def Execute(arch, mode, args, options, suites):
     "novfp3": options.novfp3,
     "predictable": options.predictable,
     "byteorder": sys.byteorder,
+    "no_harness": options.no_harness
   }
   all_tests = []
   num_tests = 0

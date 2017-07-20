@@ -1295,6 +1295,13 @@ void BytecodeGraphBuilder::VisitCreateArrayLiteral() {
   environment()->BindAccumulator(literal, Environment::kAttachFrameState);
 }
 
+void BytecodeGraphBuilder::VisitCreateEmptyArrayLiteral() {
+  int literal_index = bytecode_iterator().GetIndexOperand(0);
+  Node* literal = NewNode(javascript()->CreateEmptyLiteralArray(literal_index),
+                          GetFunctionClosure());
+  environment()->BindAccumulator(literal);
+}
+
 void BytecodeGraphBuilder::VisitCreateObjectLiteral() {
   Handle<BoilerplateDescription> constant_properties =
       Handle<BoilerplateDescription>::cast(
@@ -1357,8 +1364,7 @@ Node* BytecodeGraphBuilder::ProcessCallArguments(const Operator* call_op,
   return ProcessCallArguments(call_op, call_args, 2 + arg_count);
 }
 
-void BytecodeGraphBuilder::BuildCall(TailCallMode tail_call_mode,
-                                     ConvertReceiverMode receiver_mode,
+void BytecodeGraphBuilder::BuildCall(ConvertReceiverMode receiver_mode,
                                      Node* const* args, size_t arg_count,
                                      int slot_id) {
   DCHECK_EQ(interpreter::Bytecodes::GetReceiverMode(
@@ -1372,8 +1378,8 @@ void BytecodeGraphBuilder::BuildCall(TailCallMode tail_call_mode,
   VectorSlotPair feedback = CreateVectorSlotPair(slot_id);
 
   CallFrequency frequency = ComputeCallFrequency(slot_id);
-  const Operator* op = javascript()->Call(arg_count, frequency, feedback,
-                                          receiver_mode, tail_call_mode);
+  const Operator* op =
+      javascript()->Call(arg_count, frequency, feedback, receiver_mode);
   Node* node = nullptr;
   if (Node* simplified = TryBuildSimplifiedCall(
           op, args, static_cast<int>(arg_count), feedback.slot())) {
@@ -1385,8 +1391,7 @@ void BytecodeGraphBuilder::BuildCall(TailCallMode tail_call_mode,
   environment()->BindAccumulator(node, Environment::kAttachFrameState);
 }
 
-void BytecodeGraphBuilder::BuildCallVarArgs(TailCallMode tail_call_mode,
-                                            ConvertReceiverMode receiver_mode) {
+void BytecodeGraphBuilder::BuildCallVarArgs(ConvertReceiverMode receiver_mode) {
   DCHECK_EQ(interpreter::Bytecodes::GetReceiverMode(
                 bytecode_iterator().current_bytecode()),
             receiver_mode);
@@ -1417,17 +1422,16 @@ void BytecodeGraphBuilder::BuildCallVarArgs(TailCallMode tail_call_mode,
 
   Node* const* call_args =
       GetCallArgumentsFromRegister(callee, receiver_node, first_arg, arg_count);
-  BuildCall(tail_call_mode, receiver_mode, call_args,
-            static_cast<size_t>(2 + arg_count), slot_id);
+  BuildCall(receiver_mode, call_args, static_cast<size_t>(2 + arg_count),
+            slot_id);
 }
 
 void BytecodeGraphBuilder::VisitCallAnyReceiver() {
-  BuildCallVarArgs(TailCallMode::kDisallow, ConvertReceiverMode::kAny);
+  BuildCallVarArgs(ConvertReceiverMode::kAny);
 }
 
 void BytecodeGraphBuilder::VisitCallProperty() {
-  BuildCallVarArgs(TailCallMode::kDisallow,
-                   ConvertReceiverMode::kNotNullOrUndefined);
+  BuildCallVarArgs(ConvertReceiverMode::kNotNullOrUndefined);
 }
 
 void BytecodeGraphBuilder::VisitCallProperty0() {
@@ -1436,8 +1440,8 @@ void BytecodeGraphBuilder::VisitCallProperty0() {
   Node* receiver =
       environment()->LookupRegister(bytecode_iterator().GetRegisterOperand(1));
   int const slot_id = bytecode_iterator().GetIndexOperand(2);
-  BuildCall(TailCallMode::kDisallow, ConvertReceiverMode::kNotNullOrUndefined,
-            {callee, receiver}, slot_id);
+  BuildCall(ConvertReceiverMode::kNotNullOrUndefined, {callee, receiver},
+            slot_id);
 }
 
 void BytecodeGraphBuilder::VisitCallProperty1() {
@@ -1448,8 +1452,8 @@ void BytecodeGraphBuilder::VisitCallProperty1() {
   Node* arg0 =
       environment()->LookupRegister(bytecode_iterator().GetRegisterOperand(2));
   int const slot_id = bytecode_iterator().GetIndexOperand(3);
-  BuildCall(TailCallMode::kDisallow, ConvertReceiverMode::kNotNullOrUndefined,
-            {callee, receiver, arg0}, slot_id);
+  BuildCall(ConvertReceiverMode::kNotNullOrUndefined, {callee, receiver, arg0},
+            slot_id);
 }
 
 void BytecodeGraphBuilder::VisitCallProperty2() {
@@ -1462,13 +1466,12 @@ void BytecodeGraphBuilder::VisitCallProperty2() {
   Node* arg1 =
       environment()->LookupRegister(bytecode_iterator().GetRegisterOperand(3));
   int const slot_id = bytecode_iterator().GetIndexOperand(4);
-  BuildCall(TailCallMode::kDisallow, ConvertReceiverMode::kNotNullOrUndefined,
+  BuildCall(ConvertReceiverMode::kNotNullOrUndefined,
             {callee, receiver, arg0, arg1}, slot_id);
 }
 
 void BytecodeGraphBuilder::VisitCallUndefinedReceiver() {
-  BuildCallVarArgs(TailCallMode::kDisallow,
-                   ConvertReceiverMode::kNullOrUndefined);
+  BuildCallVarArgs(ConvertReceiverMode::kNullOrUndefined);
 }
 
 void BytecodeGraphBuilder::VisitCallUndefinedReceiver0() {
@@ -1476,8 +1479,7 @@ void BytecodeGraphBuilder::VisitCallUndefinedReceiver0() {
       environment()->LookupRegister(bytecode_iterator().GetRegisterOperand(0));
   Node* receiver = jsgraph()->UndefinedConstant();
   int const slot_id = bytecode_iterator().GetIndexOperand(1);
-  BuildCall(TailCallMode::kDisallow, ConvertReceiverMode::kNullOrUndefined,
-            {callee, receiver}, slot_id);
+  BuildCall(ConvertReceiverMode::kNullOrUndefined, {callee, receiver}, slot_id);
 }
 
 void BytecodeGraphBuilder::VisitCallUndefinedReceiver1() {
@@ -1487,8 +1489,8 @@ void BytecodeGraphBuilder::VisitCallUndefinedReceiver1() {
   Node* arg0 =
       environment()->LookupRegister(bytecode_iterator().GetRegisterOperand(1));
   int const slot_id = bytecode_iterator().GetIndexOperand(2);
-  BuildCall(TailCallMode::kDisallow, ConvertReceiverMode::kNullOrUndefined,
-            {callee, receiver, arg0}, slot_id);
+  BuildCall(ConvertReceiverMode::kNullOrUndefined, {callee, receiver, arg0},
+            slot_id);
 }
 
 void BytecodeGraphBuilder::VisitCallUndefinedReceiver2() {
@@ -1500,7 +1502,7 @@ void BytecodeGraphBuilder::VisitCallUndefinedReceiver2() {
   Node* arg1 =
       environment()->LookupRegister(bytecode_iterator().GetRegisterOperand(2));
   int const slot_id = bytecode_iterator().GetIndexOperand(3);
-  BuildCall(TailCallMode::kDisallow, ConvertReceiverMode::kNullOrUndefined,
+  BuildCall(ConvertReceiverMode::kNullOrUndefined,
             {callee, receiver, arg0, arg1}, slot_id);
 }
 
@@ -1515,14 +1517,6 @@ void BytecodeGraphBuilder::VisitCallWithSpread() {
 
   Node* value = ProcessCallArguments(call, callee, receiver, reg_count);
   environment()->BindAccumulator(value, Environment::kAttachFrameState);
-}
-
-void BytecodeGraphBuilder::VisitTailCall() {
-  TailCallMode tail_call_mode =
-      bytecode_array_->GetIsolate()->is_tail_call_elimination_enabled()
-          ? TailCallMode::kAllow
-          : TailCallMode::kDisallow;
-  BuildCallVarArgs(tail_call_mode, ConvertReceiverMode::kAny);
 }
 
 void BytecodeGraphBuilder::VisitCallJSRuntime() {
@@ -2147,45 +2141,6 @@ void BytecodeGraphBuilder::VisitToNumber() {
                               Environment::kAttachFrameState);
 }
 
-void BytecodeGraphBuilder::VisitToPrimitiveToString() {
-  PrepareEagerCheckpoint();
-  Node* object = environment()->LookupAccumulator();
-
-  Node* node = nullptr;
-  FeedbackSlot slot =
-      feedback_vector()->ToSlot(bytecode_iterator().GetIndexOperand(1));
-  if (Node* simplified = TryBuildSimplifiedToPrimitiveToString(object, slot)) {
-    node = simplified;
-  } else {
-    node = NewNode(javascript()->ToPrimitiveToString(), object);
-  }
-
-  environment()->BindRegister(bytecode_iterator().GetRegisterOperand(0), node,
-                              Environment::kAttachFrameState);
-}
-
-void BytecodeGraphBuilder::VisitStringConcat() {
-  PrepareEagerCheckpoint();
-  interpreter::Register first_reg = bytecode_iterator().GetRegisterOperand(0);
-  int operand_count =
-      static_cast<int>(bytecode_iterator().GetRegisterCountOperand(1));
-  Node** operands =
-      local_zone()->NewArray<Node*>(static_cast<size_t>(operand_count));
-  int operand_base = first_reg.index();
-  for (int i = 0; i < operand_count; ++i) {
-    Node* reg =
-        environment()->LookupRegister(interpreter::Register(operand_base + i));
-    // Explicitly insert a string check here. All operands are already strings,
-    // however in the case of generator yields in the middle of string
-    // concatenations we might lose the knowledge that the operand is a string.
-    operands[i] = NewNode(simplified()->CheckString(), reg);
-  }
-
-  Node* node = MakeNode(javascript()->StringConcat(operand_count),
-                        operand_count, operands, false);
-  environment()->BindAccumulator(node, Environment::kAttachFrameState);
-}
-
 void BytecodeGraphBuilder::VisitJump() { BuildJump(); }
 
 void BytecodeGraphBuilder::VisitJumpConstant() { BuildJump(); }
@@ -2377,8 +2332,6 @@ void BytecodeGraphBuilder::VisitSuspendGenerator() {
   CHECK_EQ(0, first_reg.index());
   int register_count =
       static_cast<int>(bytecode_iterator().GetRegisterCountOperand(2));
-  SuspendFlags flags = interpreter::SuspendGeneratorBytecodeFlags::Decode(
-      bytecode_iterator().GetFlagOperand(3));
 
   // The offsets used by the bytecode iterator are relative to a different base
   // than what is used in the interpreter, hence the addition.
@@ -2397,8 +2350,8 @@ void BytecodeGraphBuilder::VisitSuspendGenerator() {
         environment()->LookupRegister(interpreter::Register(i));
   }
 
-  MakeNode(javascript()->GeneratorStore(register_count, flags),
-           value_input_count, value_inputs, false);
+  MakeNode(javascript()->GeneratorStore(register_count), value_input_count,
+           value_inputs, false);
 }
 
 void BytecodeGraphBuilder::VisitRestoreGeneratorState() {
@@ -2442,8 +2395,6 @@ void BytecodeGraphBuilder::VisitIllegal() {
   // Not emitted in valid bytecode.
   UNREACHABLE();
 }
-
-void BytecodeGraphBuilder::VisitNop() {}
 
 void BytecodeGraphBuilder::SwitchToMergeEnvironment(int current_offset) {
   auto it = merge_environments_.find(current_offset);
@@ -2648,20 +2599,6 @@ Node* BytecodeGraphBuilder::TryBuildSimplifiedToNumber(Node* value,
   Node* control = environment()->GetControlDependency();
   Reduction early_reduction = type_hint_lowering().ReduceToNumberOperation(
       value, effect, control, slot);
-  if (early_reduction.Changed()) {
-    ApplyEarlyReduction(early_reduction);
-    return early_reduction.replacement();
-  }
-  return nullptr;
-}
-
-Node* BytecodeGraphBuilder::TryBuildSimplifiedToPrimitiveToString(
-    Node* value, FeedbackSlot slot) {
-  Node* effect = environment()->GetEffectDependency();
-  Node* control = environment()->GetControlDependency();
-  Reduction early_reduction =
-      type_hint_lowering().ReduceToPrimitiveToStringOperation(value, effect,
-                                                              control, slot);
   if (early_reduction.Changed()) {
     ApplyEarlyReduction(early_reduction);
     return early_reduction.replacement();

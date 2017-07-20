@@ -9,9 +9,7 @@
 
 #include "src/builtins/builtins-arguments-gen.h"
 #include "src/builtins/builtins-constructor-gen.h"
-#include "src/builtins/builtins-conversion-gen.h"
 #include "src/builtins/builtins-forin-gen.h"
-#include "src/builtins/builtins-string-gen.h"
 #include "src/code-events.h"
 #include "src/code-factory.h"
 #include "src/factory.h"
@@ -1334,53 +1332,6 @@ IGNITION_HANDLER(ToObject, InterpreterAssembler) {
   Dispatch();
 }
 
-// ToPrimitiveToString <dst>
-//
-// Convert the object referenced by the accumulator to a primitive, and then
-// convert the operand to a string, in preparation to be used by StringConcat.
-IGNITION_HANDLER(ToPrimitiveToString, InterpreterAssembler) {
-  VARIABLE(feedback, MachineRepresentation::kTagged);
-  ConversionBuiltinsAssembler conversions_assembler(state());
-  Node* result = conversions_assembler.ToPrimitiveToString(
-      GetContext(), GetAccumulator(), &feedback);
-
-  Node* function = LoadRegister(Register::function_closure());
-  UpdateFeedback(feedback.value(), LoadFeedbackVector(), BytecodeOperandIdx(1),
-                 function);
-  StoreRegister(result, BytecodeOperandReg(0));
-  Dispatch();
-}
-
-// StringConcat <first_reg> <reg_count>
-//
-// Concatenates the string values in registers <first_reg> to
-// <first_reg> + <reg_count - 1> and saves the result in the accumulator.
-IGNITION_HANDLER(StringConcat, InterpreterAssembler) {
-  Label call_runtime(this, Label::kDeferred), done(this);
-
-  Node* first_reg_ptr = RegisterLocation(BytecodeOperandReg(0));
-  Node* reg_count = BytecodeOperandCount(1);
-  Node* context = GetContext();
-
-  VARIABLE(result, MachineRepresentation::kTagged);
-  StringBuiltinsAssembler string_assembler(state());
-  result.Bind(string_assembler.ConcatenateStrings(context, first_reg_ptr,
-                                                  reg_count, &call_runtime));
-  Goto(&done);
-
-  BIND(&call_runtime);
-  {
-    Comment("Call runtime.");
-    Node* runtime_id = Int32Constant(Runtime::kStringConcat);
-    result.Bind(CallRuntimeN(runtime_id, context, first_reg_ptr, reg_count));
-    Goto(&done);
-  }
-
-  BIND(&done);
-  SetAccumulator(result.value());
-  Dispatch();
-}
-
 // Inc
 //
 // Increments value in the accumulator by one.
@@ -1749,7 +1700,7 @@ class InterpreterJSCallAssembler : public InterpreterAssembler {
       : InterpreterAssembler(state, bytecode, operand_scale) {}
 
   // Generates code to perform a JS call that collects type feedback.
-  void JSCall(ConvertReceiverMode receiver_mode, TailCallMode tail_call_mode) {
+  void JSCall(ConvertReceiverMode receiver_mode) {
     Node* function_reg = BytecodeOperandReg(0);
     Node* function = LoadRegister(function_reg);
     Node* first_arg_reg = BytecodeOperandReg(1);
@@ -1767,9 +1718,8 @@ class InterpreterJSCallAssembler : public InterpreterAssembler {
     Node* slot_id = BytecodeOperandIdx(3);
     Node* feedback_vector = LoadFeedbackVector();
     Node* context = GetContext();
-    Node* result =
-        CallJSWithFeedback(function, context, first_arg, args_count, slot_id,
-                           feedback_vector, receiver_mode, tail_call_mode);
+    Node* result = CallJSWithFeedback(function, context, first_arg, args_count,
+                                      slot_id, feedback_vector, receiver_mode);
     SetAccumulator(result);
     Dispatch();
   }
@@ -1832,11 +1782,11 @@ class InterpreterJSCallAssembler : public InterpreterAssembler {
 // |arg_count| arguments in subsequent registers. Collect type feedback
 // into |feedback_slot_id|
 IGNITION_HANDLER(CallAnyReceiver, InterpreterJSCallAssembler) {
-  JSCall(ConvertReceiverMode::kAny, TailCallMode::kDisallow);
+  JSCall(ConvertReceiverMode::kAny);
 }
 
 IGNITION_HANDLER(CallProperty, InterpreterJSCallAssembler) {
-  JSCall(ConvertReceiverMode::kNotNullOrUndefined, TailCallMode::kDisallow);
+  JSCall(ConvertReceiverMode::kNotNullOrUndefined);
 }
 
 IGNITION_HANDLER(CallProperty0, InterpreterJSCallAssembler) {
@@ -1852,7 +1802,7 @@ IGNITION_HANDLER(CallProperty2, InterpreterJSCallAssembler) {
 }
 
 IGNITION_HANDLER(CallUndefinedReceiver, InterpreterJSCallAssembler) {
-  JSCall(ConvertReceiverMode::kNullOrUndefined, TailCallMode::kDisallow);
+  JSCall(ConvertReceiverMode::kNullOrUndefined);
 }
 
 IGNITION_HANDLER(CallUndefinedReceiver0, InterpreterJSCallAssembler) {
@@ -1865,15 +1815,6 @@ IGNITION_HANDLER(CallUndefinedReceiver1, InterpreterJSCallAssembler) {
 
 IGNITION_HANDLER(CallUndefinedReceiver2, InterpreterJSCallAssembler) {
   JSCallN(2, ConvertReceiverMode::kNullOrUndefined);
-}
-
-// TailCall <callable> <receiver> <arg_count> <feedback_slot_id>
-//
-// Tail call a JSfunction or Callable in |callable| with the |receiver| and
-// |arg_count| arguments in subsequent registers. Collect type feedback
-// into |feedback_slot_id|
-IGNITION_HANDLER(TailCall, InterpreterJSCallAssembler) {
-  JSCall(ConvertReceiverMode::kAny, TailCallMode::kAllow);
 }
 
 // CallRuntime <function_id> <first_arg> <arg_count>
@@ -1952,7 +1893,7 @@ IGNITION_HANDLER(CallJSRuntime, InterpreterAssembler) {
 
   // Call the function.
   Node* result = CallJS(function, context, first_arg, args_count,
-                        ConvertReceiverMode::kAny, TailCallMode::kDisallow);
+                        ConvertReceiverMode::kAny);
   SetAccumulator(result);
   Dispatch();
 }
@@ -2680,9 +2621,9 @@ IGNITION_HANDLER(CreateArrayLiteral, InterpreterAssembler) {
   Node* bytecode_flags = BytecodeOperandFlag(2);
 
   Label fast_shallow_clone(this), call_runtime(this, Label::kDeferred);
-  Branch(
-      IsSetWord32<CreateArrayLiteralFlags::FastShallowCloneBit>(bytecode_flags),
-      &fast_shallow_clone, &call_runtime);
+  Branch(IsSetWord32<CreateArrayLiteralFlags::FastCloneSupportedBit>(
+             bytecode_flags),
+         &fast_shallow_clone, &call_runtime);
 
   BIND(&fast_shallow_clone);
   {
@@ -2705,6 +2646,20 @@ IGNITION_HANDLER(CreateArrayLiteral, InterpreterAssembler) {
     SetAccumulator(result);
     Dispatch();
   }
+}
+
+// CreateEmptyArrayLiteral <literal_idx>
+//
+// Creates an empty JSArray literal for literal index <literal_idx>.
+IGNITION_HANDLER(CreateEmptyArrayLiteral, InterpreterAssembler) {
+  Node* literal_index = BytecodeOperandIdxSmi(0);
+  Node* closure = LoadRegister(Register::function_closure());
+  Node* context = GetContext();
+  ConstructorBuiltinsAssembler constructor_assembler(state());
+  Node* result = constructor_assembler.EmitCreateEmptyArrayLiteral(
+      closure, literal_index, context);
+  SetAccumulator(result);
+  Dispatch();
 }
 
 // CreateObjectLiteral <element_idx> <literal_idx> <flags>
@@ -3261,19 +3216,13 @@ IGNITION_HANDLER(ExtraWide, InterpreterAssembler) {
 // An invalid bytecode aborting execution if dispatched.
 IGNITION_HANDLER(Illegal, InterpreterAssembler) { Abort(kInvalidBytecode); }
 
-// Nop
-//
-// No operation.
-IGNITION_HANDLER(Nop, InterpreterAssembler) { Dispatch(); }
-
-// SuspendGenerator <generator> <first input register> <register count> <flags>
+// SuspendGenerator <generator> <first input register> <register count>
 //
 // Exports the register file and stores it into the generator.  Also stores the
 // current context, the state given in the accumulator, and the current bytecode
 // offset (for debugging purposes) into the generator.
 IGNITION_HANDLER(SuspendGenerator, InterpreterAssembler) {
   Node* generator_reg = BytecodeOperandReg(0);
-  Node* flags = BytecodeOperandFlag(3);
 
   Node* generator = LoadRegister(generator_reg);
 
@@ -3302,41 +3251,11 @@ IGNITION_HANDLER(SuspendGenerator, InterpreterAssembler) {
   StoreObjectField(generator, JSGeneratorObject::kContextOffset, context);
   StoreObjectField(generator, JSGeneratorObject::kContinuationOffset, state);
 
-  Label if_asyncgeneratorawait(this), if_notasyncgeneratorawait(this),
-      merge(this);
-
-  // Calculate bytecode offset to store in the [input_or_debug_pos] or
-  // [await_input_or_debug_pos] fields, to be used by the inspector.
+  // Store the bytecode offset in the [input_or_debug_pos] field, to be used by
+  // the inspector.
   Node* offset = SmiTag(BytecodeOffset());
-
-  using AsyncGeneratorAwaitBits = SuspendGeneratorBytecodeFlags::FlagsBits;
-  Branch(Word32Equal(DecodeWord32<AsyncGeneratorAwaitBits>(flags),
-                     Int32Constant(
-                         static_cast<int>(SuspendFlags::kAsyncGeneratorAwait))),
-         &if_asyncgeneratorawait, &if_notasyncgeneratorawait);
-
-  BIND(&if_notasyncgeneratorawait);
-  {
-    // For ordinary yields (and for AwaitExpressions in Async Functions, which
-    // are implemented as ordinary yields), it is safe to write over the
-    // [input_or_debug_pos] field.
-    StoreObjectField(generator, JSGeneratorObject::kInputOrDebugPosOffset,
-                     offset);
-    Goto(&merge);
-  }
-
-  BIND(&if_asyncgeneratorawait);
-  {
-    // An AwaitExpression in an Async Generator requires writing to the
-    // [await_input_or_debug_pos] field.
-    CSA_ASSERT(this,
-               HasInstanceType(generator, JS_ASYNC_GENERATOR_OBJECT_TYPE));
-    StoreObjectField(
-        generator, JSAsyncGeneratorObject::kAwaitInputOrDebugPosOffset, offset);
-    Goto(&merge);
-  }
-
-  BIND(&merge);
+  StoreObjectField(generator, JSGeneratorObject::kInputOrDebugPosOffset,
+                   offset);
   Dispatch();
 
   BIND(&if_stepping);

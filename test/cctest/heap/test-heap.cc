@@ -2199,9 +2199,9 @@ TEST(InstanceOfStubWriteBarrier) {
 
   CHECK(f->IsOptimized());
 
-  while (
-      !ObjectMarking::IsBlack(f->code(), MarkingState::Internal(f->code())) &&
-      !marking->IsStopped()) {
+  while (!ObjectMarking::IsBlack<IncrementalMarking::kAtomicity>(
+             f->code(), MarkingState::Internal(f->code())) &&
+         !marking->IsStopped()) {
     // Discard any pending GC requests otherwise we will get GC when we enter
     // code below.
     marking->Step(MB, IncrementalMarking::NO_GC_VIA_STACK_GUARD,
@@ -2265,7 +2265,7 @@ TEST(ResetSharedFunctionInfoCountersDuringIncrementalMarking) {
 
   CHECK_EQ(CcTest::heap()->global_ic_age(), f->shared()->ic_age());
   CHECK_EQ(0, f->shared()->opt_count());
-  CHECK_EQ(0, f->feedback_vector()->profiler_ticks());
+  CHECK_EQ(0, f->shared()->profiler_ticks());
 }
 
 
@@ -2308,7 +2308,7 @@ TEST(ResetSharedFunctionInfoCountersDuringMarkSweep) {
 
   CHECK_EQ(CcTest::heap()->global_ic_age(), f->shared()->ic_age());
   CHECK_EQ(0, f->shared()->opt_count());
-  CHECK_EQ(0, f->feedback_vector()->profiler_ticks());
+  CHECK_EQ(0, f->shared()->profiler_ticks());
 }
 
 
@@ -2620,7 +2620,7 @@ TEST(OptimizedPretenuringDoubleArrayProperties) {
       v8::Utils::OpenHandle(*v8::Local<v8::Object>::Cast(res)));
 
   CHECK(CcTest::heap()->InOldSpace(*o));
-  CHECK(CcTest::heap()->InOldSpace(o->properties()));
+  CHECK(CcTest::heap()->InOldSpace(o->property_array()));
 }
 
 
@@ -4097,7 +4097,7 @@ TEST(ObjectsInOptimizedCodeAreWeak) {
 }
 
 TEST(NewSpaceObjectsInOptimizedCode) {
-  if (FLAG_always_opt || !FLAG_opt || FLAG_ignition) return;
+  if (FLAG_always_opt || !FLAG_opt || !FLAG_stress_fullcodegen) return;
   FLAG_allow_natives_syntax = true;
   CcTest::InitializeVM();
   Isolate* isolate = CcTest::i_isolate();
@@ -4806,7 +4806,7 @@ HEAP_TEST(Regress538257) {
   FLAG_manual_evacuation_candidates_selection = true;
   v8::Isolate::CreateParams create_params;
   // Set heap limits.
-  create_params.constraints.set_max_semi_space_size(1);
+  create_params.constraints.set_max_semi_space_size_in_kb(1024);
   create_params.constraints.set_max_old_space_size(6);
   create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
   v8::Isolate* isolate = v8::Isolate::New(create_params);
@@ -4910,7 +4910,7 @@ TEST(Regress388880) {
   heap::CreatePadding(heap, static_cast<int>(padding_size), TENURED);
 
   Handle<JSObject> o = factory->NewJSObjectFromMap(map1, TENURED);
-  o->set_properties(*factory->empty_fixed_array());
+  o->set_raw_properties_or_hash(*factory->empty_fixed_array());
 
   // Ensure that the object allocated where we need it.
   Page* page = Page::FromAddress(o->address());
@@ -4958,8 +4958,8 @@ TEST(Regress3631) {
       v8::Utils::OpenHandle(*v8::Local<v8::Object>::Cast(result));
   Handle<JSWeakCollection> weak_map(reinterpret_cast<JSWeakCollection*>(*obj));
   HeapObject* weak_map_table = HeapObject::cast(weak_map->table());
-  while (!ObjectMarking::IsBlack(weak_map_table,
-                                 MarkingState::Internal(weak_map_table)) &&
+  while (!ObjectMarking::IsBlack<IncrementalMarking::kAtomicity>(
+             weak_map_table, MarkingState::Internal(weak_map_table)) &&
          !marking->IsStopped()) {
     marking->Step(MB, IncrementalMarking::NO_GC_VIA_STACK_GUARD,
                   IncrementalMarking::FORCE_COMPLETION, StepOrigin::kV8);
@@ -5740,7 +5740,8 @@ TEST(Regress598319) {
   // progress bar, we would fail here.
   for (int i = 0; i < arr.get()->length(); i++) {
     HeapObject* arr_value = HeapObject::cast(arr.get()->get(i));
-    CHECK(ObjectMarking::IsBlack(arr_value, MarkingState::Internal(arr_value)));
+    CHECK(ObjectMarking::IsBlack<IncrementalMarking::kAtomicity>(
+        arr_value, MarkingState::Internal(arr_value)));
   }
 }
 
@@ -5887,13 +5888,15 @@ TEST(LeftTrimFixedArrayInBlackArea) {
   isolate->factory()->NewFixedArray(4, TENURED);
   Handle<FixedArray> array = isolate->factory()->NewFixedArray(50, TENURED);
   CHECK(heap->old_space()->Contains(*array));
-  CHECK(ObjectMarking::IsBlack(*array, MarkingState::Internal(*array)));
+  CHECK(ObjectMarking::IsBlack<IncrementalMarking::kAtomicity>(
+      *array, MarkingState::Internal(*array)));
 
   // Now left trim the allocated black area. A filler has to be installed
   // for the trimmed area and all mark bits of the trimmed area have to be
   // cleared.
   FixedArrayBase* trimmed = heap->LeftTrimFixedArray(*array, 10);
-  CHECK(ObjectMarking::IsBlack(trimmed, MarkingState::Internal(trimmed)));
+  CHECK(ObjectMarking::IsBlack<IncrementalMarking::kAtomicity>(
+      trimmed, MarkingState::Internal(trimmed)));
 
   heap::GcAndSweep(heap, OLD_SPACE);
 }
@@ -5930,7 +5933,8 @@ TEST(ContinuousLeftTrimFixedArrayInBlackArea) {
   Address start_address = array->address();
   Address end_address = start_address + array->Size();
   Page* page = Page::FromAddress(start_address);
-  CHECK(ObjectMarking::IsBlack(*array, MarkingState::Internal(*array)));
+  CHECK(ObjectMarking::IsBlack<IncrementalMarking::kAtomicity>(
+      *array, MarkingState::Internal(*array)));
   CHECK(MarkingState::Internal(page).bitmap()->AllBitsSetInRange(
       page->AddressToMarkbitIndex(start_address),
       page->AddressToMarkbitIndex(end_address)));
@@ -5944,8 +5948,10 @@ TEST(ContinuousLeftTrimFixedArrayInBlackArea) {
     trimmed = heap->LeftTrimFixedArray(previous, 1);
     HeapObject* filler = HeapObject::FromAddress(previous->address());
     CHECK(filler->IsFiller());
-    CHECK(ObjectMarking::IsBlack(trimmed, MarkingState::Internal(trimmed)));
-    CHECK(ObjectMarking::IsBlack(previous, MarkingState::Internal(previous)));
+    CHECK(ObjectMarking::IsBlack<IncrementalMarking::kAtomicity>(
+        trimmed, MarkingState::Internal(trimmed)));
+    CHECK(ObjectMarking::IsBlack<IncrementalMarking::kAtomicity>(
+        previous, MarkingState::Internal(previous)));
     previous = trimmed;
   }
 
@@ -5955,8 +5961,10 @@ TEST(ContinuousLeftTrimFixedArrayInBlackArea) {
       trimmed = heap->LeftTrimFixedArray(previous, i);
       HeapObject* filler = HeapObject::FromAddress(previous->address());
       CHECK(filler->IsFiller());
-      CHECK(ObjectMarking::IsBlack(trimmed, MarkingState::Internal(trimmed)));
-      CHECK(ObjectMarking::IsBlack(previous, MarkingState::Internal(previous)));
+      CHECK(ObjectMarking::IsBlack<IncrementalMarking::kAtomicity>(
+          trimmed, MarkingState::Internal(trimmed)));
+      CHECK(ObjectMarking::IsBlack<IncrementalMarking::kAtomicity>(
+          previous, MarkingState::Internal(previous)));
       previous = trimmed;
     }
   }
@@ -5996,7 +6004,8 @@ TEST(ContinuousRightTrimFixedArrayInBlackArea) {
   Address start_address = array->address();
   Address end_address = start_address + array->Size();
   Page* page = Page::FromAddress(start_address);
-  CHECK(ObjectMarking::IsBlack(*array, MarkingState::Internal(*array)));
+  CHECK(ObjectMarking::IsBlack<IncrementalMarking::kAtomicity>(
+      *array, MarkingState::Internal(*array)));
 
   CHECK(MarkingState::Internal(page).bitmap()->AllBitsSetInRange(
       page->AddressToMarkbitIndex(start_address),
@@ -6091,46 +6100,56 @@ TEST(RememberedSetRemoveRange) {
     RememberedSet<OLD_TO_NEW>::Insert(chunk, x.first);
   }
 
-  RememberedSet<OLD_TO_NEW>::Iterate(chunk, [&slots](Address addr) {
-    CHECK(slots[addr]);
-    return KEEP_SLOT;
-  });
+  RememberedSet<OLD_TO_NEW>::Iterate(chunk,
+                                     [&slots](Address addr) {
+                                       CHECK(slots[addr]);
+                                       return KEEP_SLOT;
+                                     },
+                                     SlotSet::PREFREE_EMPTY_BUCKETS);
 
   RememberedSet<OLD_TO_NEW>::RemoveRange(chunk, start, start + kPointerSize,
                                          SlotSet::FREE_EMPTY_BUCKETS);
   slots[start] = false;
-  RememberedSet<OLD_TO_NEW>::Iterate(chunk, [&slots](Address addr) {
-    CHECK(slots[addr]);
-    return KEEP_SLOT;
-  });
+  RememberedSet<OLD_TO_NEW>::Iterate(chunk,
+                                     [&slots](Address addr) {
+                                       CHECK(slots[addr]);
+                                       return KEEP_SLOT;
+                                     },
+                                     SlotSet::PREFREE_EMPTY_BUCKETS);
 
   RememberedSet<OLD_TO_NEW>::RemoveRange(chunk, start + kPointerSize,
                                          start + Page::kPageSize,
                                          SlotSet::FREE_EMPTY_BUCKETS);
   slots[start + kPointerSize] = false;
   slots[start + Page::kPageSize - kPointerSize] = false;
-  RememberedSet<OLD_TO_NEW>::Iterate(chunk, [&slots](Address addr) {
-    CHECK(slots[addr]);
-    return KEEP_SLOT;
-  });
+  RememberedSet<OLD_TO_NEW>::Iterate(chunk,
+                                     [&slots](Address addr) {
+                                       CHECK(slots[addr]);
+                                       return KEEP_SLOT;
+                                     },
+                                     SlotSet::PREFREE_EMPTY_BUCKETS);
 
   RememberedSet<OLD_TO_NEW>::RemoveRange(chunk, start,
                                          start + Page::kPageSize + kPointerSize,
                                          SlotSet::FREE_EMPTY_BUCKETS);
   slots[start + Page::kPageSize] = false;
-  RememberedSet<OLD_TO_NEW>::Iterate(chunk, [&slots](Address addr) {
-    CHECK(slots[addr]);
-    return KEEP_SLOT;
-  });
+  RememberedSet<OLD_TO_NEW>::Iterate(chunk,
+                                     [&slots](Address addr) {
+                                       CHECK(slots[addr]);
+                                       return KEEP_SLOT;
+                                     },
+                                     SlotSet::PREFREE_EMPTY_BUCKETS);
 
   RememberedSet<OLD_TO_NEW>::RemoveRange(
       chunk, chunk->area_end() - kPointerSize, chunk->area_end(),
       SlotSet::FREE_EMPTY_BUCKETS);
   slots[chunk->area_end() - kPointerSize] = false;
-  RememberedSet<OLD_TO_NEW>::Iterate(chunk, [&slots](Address addr) {
-    CHECK(slots[addr]);
-    return KEEP_SLOT;
-  });
+  RememberedSet<OLD_TO_NEW>::Iterate(chunk,
+                                     [&slots](Address addr) {
+                                       CHECK(slots[addr]);
+                                       return KEEP_SLOT;
+                                     },
+                                     SlotSet::PREFREE_EMPTY_BUCKETS);
 }
 
 HEAP_TEST(Regress670675) {
@@ -6249,6 +6268,27 @@ HEAP_TEST(RegressMissingWriteBarrierInAllocate) {
     collector->EnsureSweepingCompleted();
   }
   CHECK(object->map()->IsMap());
+}
+
+UNINITIALIZED_TEST(ReinitializeStringHashSeed) {
+  // Enable rehashing and create an isolate and context.
+  i::FLAG_rehash_snapshot = true;
+  for (int i = 1; i < 3; i++) {
+    i::FLAG_hash_seed = 1337 * i;
+    v8::Isolate::CreateParams create_params;
+    create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
+    v8::Isolate* isolate = v8::Isolate::New(create_params);
+    {
+      v8::Isolate::Scope isolate_scope(isolate);
+      CHECK_EQ(1337 * i,
+               reinterpret_cast<i::Isolate*>(isolate)->heap()->HashSeed());
+      v8::HandleScope handle_scope(isolate);
+      v8::Local<v8::Context> context = v8::Context::New(isolate);
+      CHECK(!context.IsEmpty());
+      v8::Context::Scope context_scope(context);
+    }
+    isolate->Dispose();
+  }
 }
 
 }  // namespace internal

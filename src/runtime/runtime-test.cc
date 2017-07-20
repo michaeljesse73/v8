@@ -126,9 +126,9 @@ RUNTIME_FUNCTION(Runtime_DeoptimizeFunction) {
   // If the function is not optimized, just return.
   if (!function->IsOptimized()) return isolate->heap()->undefined_value();
 
-  // TODO(turbofan): Deoptimization is not supported yet.
+  // TODO(turbofan): Deoptimization from AstGraphBuilder is not supported.
   if (function->code()->is_turbofanned() &&
-      function->shared()->asm_function()) {
+      !function->shared()->HasBytecodeArray()) {
     return isolate->heap()->undefined_value();
   }
 
@@ -152,9 +152,9 @@ RUNTIME_FUNCTION(Runtime_DeoptimizeNow) {
   // If the function is not optimized, just return.
   if (!function->IsOptimized()) return isolate->heap()->undefined_value();
 
-  // TODO(turbofan): Deoptimization is not supported yet.
+  // TODO(turbofan): Deoptimization from AstGraphBuilder is not supported.
   if (function->code()->is_turbofanned() &&
-      function->shared()->asm_function()) {
+      !function->shared()->HasBytecodeArray()) {
     return isolate->heap()->undefined_value();
   }
 
@@ -612,6 +612,17 @@ RUNTIME_FUNCTION(Runtime_DebugTrace) {
   return isolate->heap()->undefined_value();
 }
 
+RUNTIME_FUNCTION(Runtime_DebugTrackRetainingPath) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+  if (!FLAG_track_retaining_path) {
+    PrintF("DebugTrackRetainingPath requires --track-retaining-path flag.\n");
+  } else {
+    CONVERT_ARG_HANDLE_CHECKED(HeapObject, object, 0);
+    isolate->heap()->AddRetainingPathTarget(object);
+  }
+  return isolate->heap()->undefined_value();
+}
 
 // This will not allocate (flatten the string), but it may run
 // very slowly for very deeply nested ConsStrings.  For debugging use only.
@@ -736,14 +747,6 @@ RUNTIME_FUNCTION(Runtime_TraceExit) {
   obj->ShortPrint();
   PrintF("\n");
   return obj;  // return TOS
-}
-
-RUNTIME_FUNCTION(Runtime_TraceTailCall) {
-  SealHandleScope shs(isolate);
-  DCHECK_EQ(0, args.length());
-  PrintIndentation(isolate);
-  PrintF("} -> tail call ->\n");
-  return isolate->heap()->undefined_value();
 }
 
 RUNTIME_FUNCTION(Runtime_GetExceptionDetails) {

@@ -16,7 +16,9 @@ namespace internal {
 void TransitionArray::Insert(Handle<Map> map, Handle<Name> name,
                              Handle<Map> target, SimpleTransitionFlag flag) {
   Isolate* isolate = map->GetIsolate();
-  target->SetBackPointer(*map);
+  if (flag != SPECIAL_SHORTCUT_TRANSITION) {
+    target->SetBackPointer(*map);
+  }
 
   // If the map doesn't have any transitions at all yet, install the new one.
   if (CanStoreSimpleTransition(map->raw_transitions())) {
@@ -30,7 +32,7 @@ void TransitionArray::Insert(Handle<Map> map, Handle<Name> name,
     ReplaceTransitions(map, *result);
   }
 
-  bool is_special_transition = flag == SPECIAL_TRANSITION;
+  bool is_special_transition = flag >= SPECIAL_TRANSITION;
   // If the map has a simple transition, check if it should be overwritten.
   if (IsSimpleTransition(map->raw_transitions())) {
     Map* old_target = GetSimpleTransition(map->raw_transitions());
@@ -551,5 +553,47 @@ int TransitionArray::Search(PropertyKind kind, Name* name,
   if (transition == kNotFound) return kNotFound;
   return SearchDetails(transition, kind, attributes, out_insertion_index);
 }
+
+void TransitionArray::Sort() {
+  DisallowHeapAllocation no_gc;
+  // In-place insertion sort.
+  int length = number_of_transitions();
+  for (int i = 1; i < length; i++) {
+    Name* key = GetKey(i);
+    Map* target = GetTarget(i);
+    PropertyKind kind = kData;
+    PropertyAttributes attributes = NONE;
+    if (!IsSpecialTransition(key)) {
+      PropertyDetails details = GetTargetDetails(key, target);
+      kind = details.kind();
+      attributes = details.attributes();
+    }
+    int j;
+    for (j = i - 1; j >= 0; j--) {
+      Name* temp_key = GetKey(j);
+      Map* temp_target = GetTarget(j);
+      PropertyKind temp_kind = kData;
+      PropertyAttributes temp_attributes = NONE;
+      if (!IsSpecialTransition(temp_key)) {
+        PropertyDetails details = GetTargetDetails(temp_key, temp_target);
+        temp_kind = details.kind();
+        temp_attributes = details.attributes();
+      }
+      int cmp =
+          CompareKeys(temp_key, temp_key->Hash(), temp_kind, temp_attributes,
+                      key, key->Hash(), kind, attributes);
+      if (cmp > 0) {
+        SetKey(j + 1, temp_key);
+        SetTarget(j + 1, temp_target);
+      } else {
+        break;
+      }
+    }
+    SetKey(j + 1, key);
+    SetTarget(j + 1, target);
+  }
+  DCHECK(IsSortedNoDuplicates());
+}
+
 }  // namespace internal
 }  // namespace v8

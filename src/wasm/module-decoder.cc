@@ -444,11 +444,10 @@ class ModuleDecoder : public Decoder {
           if (!AddTable(module_.get())) break;
           import->index =
               static_cast<uint32_t>(module_->function_tables.size());
-          module_->function_tables.push_back({0, 0, false,
-                                              std::vector<int32_t>(), true,
-                                              false, SignatureMap()});
-          expect_u8("element type", kWasmAnyFunctionTypeForm);
+          module_->function_tables.emplace_back();
           WasmIndirectFunctionTable* table = &module_->function_tables.back();
+          table->imported = true;
+          expect_u8("element type", kWasmAnyFunctionTypeForm);
           consume_resizable_limits("element count", "elements",
                                    FLAG_wasm_max_table_size, &table->min_size,
                                    &table->has_max, FLAG_wasm_max_table_size,
@@ -508,8 +507,7 @@ class ModuleDecoder : public Decoder {
 
     for (uint32_t i = 0; ok() && i < table_count; i++) {
       if (!AddTable(module_.get())) break;
-      module_->function_tables.push_back(
-          {0, 0, false, std::vector<int32_t>(), false, false, SignatureMap()});
+      module_->function_tables.emplace_back();
       WasmIndirectFunctionTable* table = &module_->function_tables.back();
       expect_u8("table type", kWasmAnyFunctionTypeForm);
       consume_resizable_limits("table elements", "elements",
@@ -662,8 +660,7 @@ class ModuleDecoder : public Decoder {
       WasmInitExpr offset = consume_init_expr(module_.get(), kWasmI32);
       uint32_t num_elem =
           consume_count("number of elements", kV8MaxWasmTableEntries);
-      std::vector<uint32_t> vector;
-      module_->table_inits.push_back({table_index, offset, vector});
+      module_->table_inits.emplace_back(table_index, offset);
       WasmTableInit* init = &module_->table_inits.back();
       for (uint32_t j = 0; j < num_elem; j++) {
         WasmFunction* func = nullptr;
@@ -1257,12 +1254,9 @@ class ModuleDecoder : public Decoder {
   }
 };
 
-}  // namespace
-
 ModuleResult DecodeWasmModule(Isolate* isolate, const byte* module_start,
                               const byte* module_end, bool verify_functions,
-                              ModuleOrigin origin, Counters* counters,
-                              bool is_sync) {
+                              ModuleOrigin origin, Counters* counters) {
   auto counter = origin == kWasmOrigin
                      ? counters->wasm_decode_wasm_module_time()
                      : counters->wasm_decode_asm_module_time();
@@ -1272,14 +1266,10 @@ ModuleResult DecodeWasmModule(Isolate* isolate, const byte* module_start,
   if (size >= kV8MaxWasmModuleSize)
     return ModuleResult::Error("size > maximum module size: %zu", size);
   // TODO(bradnelson): Improve histogram handling of size_t.
-  if (is_sync) {
-    // TODO(karlschimpf): Make this work when asynchronous.
-    // https://bugs.chromium.org/p/v8/issues/detail?id=6361
-    auto counter = origin == kWasmOrigin
-                       ? counters->wasm_wasm_module_size_bytes()
-                       : counters->wasm_asm_module_size_bytes();
-    counter->AddSample(static_cast<int>(size));
-  }
+  auto size_counter = origin == kWasmOrigin
+                          ? counters->wasm_wasm_module_size_bytes()
+                          : counters->wasm_asm_module_size_bytes();
+  size_counter->AddSample(static_cast<int>(size));
   // Signatures are stored in zone memory, which have the same lifetime
   // as the {module}.
   ModuleDecoder decoder(module_start, module_end, origin);
@@ -1288,23 +1278,24 @@ ModuleResult DecodeWasmModule(Isolate* isolate, const byte* module_start,
   // TODO(titzer): this isn't accurate, since it doesn't count the data
   // allocated on the C++ heap.
   // https://bugs.chromium.org/p/chromium/issues/detail?id=657320
-  if (is_sync && result.ok()) {
-    // TODO(karlschimpf): Make this work when asynchronous.
-    // https://bugs.chromium.org/p/v8/issues/detail?id=6361
-    auto counter = origin == kWasmOrigin
-                       ? counters->wasm_decode_wasm_module_peak_memory_bytes()
-                       : counters->wasm_decode_asm_module_peak_memory_bytes();
-    counter->AddSample(
+  if (result.ok()) {
+    auto peak_counter =
+        origin == kWasmOrigin
+            ? counters->wasm_decode_wasm_module_peak_memory_bytes()
+            : counters->wasm_decode_asm_module_peak_memory_bytes();
+    peak_counter->AddSample(
         static_cast<int>(result.val->signature_zone->allocation_size()));
   }
   return result;
 }
 
+}  // namespace
+
 ModuleResult SyncDecodeWasmModule(Isolate* isolate, const byte* module_start,
                                   const byte* module_end, bool verify_functions,
                                   ModuleOrigin origin) {
   return DecodeWasmModule(isolate, module_start, module_end, verify_functions,
-                          origin, isolate->counters(), true);
+                          origin, isolate->counters());
 }
 
 ModuleResult AsyncDecodeWasmModule(
@@ -1312,7 +1303,7 @@ ModuleResult AsyncDecodeWasmModule(
     bool verify_functions, ModuleOrigin origin,
     const std::shared_ptr<Counters> async_counters) {
   return DecodeWasmModule(isolate, module_start, module_end, verify_functions,
-                          origin, async_counters.get(), false);
+                          origin, async_counters.get());
 }
 
 FunctionSig* DecodeWasmSignatureForTesting(Zone* zone, const byte* start,
@@ -1332,8 +1323,8 @@ namespace {
 FunctionResult DecodeWasmFunction(Isolate* isolate, Zone* zone,
                                   ModuleBytesEnv* module_env,
                                   const byte* function_start,
-                                  const byte* function_end, Counters* counters,
-                                  bool is_sync) {
+                                  const byte* function_end,
+                                  Counters* counters) {
   size_t size = function_end - function_start;
   bool is_wasm = module_env->module_env.is_wasm();
   auto size_histogram = is_wasm ? counters->wasm_wasm_function_size_bytes()
@@ -1358,7 +1349,7 @@ FunctionResult SyncDecodeWasmFunction(Isolate* isolate, Zone* zone,
                                       const byte* function_start,
                                       const byte* function_end) {
   return DecodeWasmFunction(isolate, zone, module_env, function_start,
-                            function_end, isolate->counters(), true);
+                            function_end, isolate->counters());
 }
 
 FunctionResult AsyncDecodeWasmFunction(
@@ -1366,7 +1357,7 @@ FunctionResult AsyncDecodeWasmFunction(
     const byte* function_start, const byte* function_end,
     std::shared_ptr<Counters> async_counters) {
   return DecodeWasmFunction(isolate, zone, module_env, function_start,
-                            function_end, async_counters.get(), false);
+                            function_end, async_counters.get());
 }
 
 AsmJsOffsetsResult DecodeAsmJsOffsets(const byte* tables_start,

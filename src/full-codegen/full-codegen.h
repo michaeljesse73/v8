@@ -45,7 +45,7 @@ class FullCodeGenerator final : public AstVisitor<FullCodeGenerator> {
   static const int kMaxBackEdgeWeight = 127;
 
   // Platform-specific code size multiplier.
-#if V8_TARGET_ARCH_IA32 || V8_TARGET_ARCH_X87
+#if V8_TARGET_ARCH_IA32
   static const int kCodeSizeMultiplier = 105;
 #elif V8_TARGET_ARCH_X64
   static const int kCodeSizeMultiplier = 165;
@@ -495,8 +495,7 @@ class FullCodeGenerator final : public AstVisitor<FullCodeGenerator> {
   // This is used in loop headers where we want to break for each iteration.
   void SetExpressionAsStatementPosition(Expression* expr);
 
-  void SetCallPosition(Expression* expr,
-                       TailCallMode tail_call_mode = TailCallMode::kDisallow);
+  void SetCallPosition(Expression* expr);
 
   void SetConstructCallPosition(Expression* expr) {
     // Currently call and construct calls are treated the same wrt debugging.

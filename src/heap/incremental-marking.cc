@@ -294,7 +294,7 @@ class IncrementalMarkingMarkingVisitor final
     Object* target = *p;
     if (target->IsHeapObject()) {
       collector_->RecordSlot(host, p, target);
-      MarkObject(target);
+      MarkObject(host, target);
     }
   }
 
@@ -304,13 +304,13 @@ class IncrementalMarkingMarkingVisitor final
       Object* target = *p;
       if (target->IsHeapObject()) {
         collector_->RecordSlot(host, p, target);
-        MarkObject(target);
+        MarkObject(host, target);
       }
     }
   }
 
   // Marks the object grey and pushes it on the marking stack.
-  V8_INLINE void MarkObject(Object* obj) {
+  V8_INLINE void MarkObject(HeapObject* host, Object* obj) {
     incremental_marking_->WhiteToGreyAndPush(HeapObject::cast(obj));
   }
 
@@ -592,7 +592,7 @@ void IncrementalMarking::StartMarking() {
   heap_->IterateStrongRoots(&visitor, VISIT_ONLY_STRONG);
 
   if (FLAG_concurrent_marking) {
-    heap_->concurrent_marking()->Start();
+    heap_->concurrent_marking()->ScheduleTasks();
   }
 
   // Ready to start incremental marking.
@@ -1210,6 +1210,10 @@ size_t IncrementalMarking::Step(size_t bytes_to_process,
 
   size_t bytes_processed = 0;
   if (state_ == MARKING) {
+    if (FLAG_trace_incremental_marking && FLAG_trace_concurrent_marking &&
+        FLAG_trace_gc_verbose) {
+      marking_worklist()->Print();
+    }
     bytes_processed = ProcessMarkingWorklist(bytes_to_process);
     if (step_origin == StepOrigin::kTask) {
       bytes_marked_ahead_of_schedule_ += bytes_processed;
@@ -1232,6 +1236,9 @@ size_t IncrementalMarking::Step(size_t bytes_to_process,
         heap_->local_embedder_heap_tracer()->NotifyV8MarkingWorklistWasEmpty();
       }
     }
+  }
+  if (FLAG_concurrent_marking) {
+    heap_->concurrent_marking()->RescheduleTasksIfNeeded();
   }
 
   double end = heap_->MonotonicallyIncreasingTimeInMs();

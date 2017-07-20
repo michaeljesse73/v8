@@ -16,8 +16,8 @@ namespace internal {
 
 namespace {
 
-bool IsUninitializedLiteralSite(Handle<Object> literal_site) {
-  return *literal_site == Smi::kZero;
+bool IsUninitializedLiteralSite(Object* literal_site) {
+  return literal_site == Smi::kZero;
 }
 
 bool HasBoilerplate(Isolate* isolate, Handle<Object> literal_site) {
@@ -125,7 +125,7 @@ MaybeHandle<JSObject> JSObjectWalkVisitor<ContextObject>::StructureWalk(
         }
       }
     } else {
-      Handle<NameDictionary> dict(NameDictionary::cast(copy->properties()));
+      Handle<NameDictionary> dict(copy->property_dictionary());
       for (int i = 0; i < dict->Capacity(); i++) {
         Object* raw = dict->ValueAt(i);
         if (!raw->IsJSObject()) continue;
@@ -458,11 +458,8 @@ MaybeHandle<JSObject> CreateLiteral(Isolate* isolate,
   FeedbackSlot literals_slot(FeedbackVector::ToSlot(literals_index));
   CHECK(literals_slot.ToInt() < vector->slot_count());
   Handle<Object> literal_site(vector->Get(literals_slot), isolate);
-
-  STATIC_ASSERT(static_cast<int>(ObjectLiteral::kShallowProperties) ==
-                static_cast<int>(ArrayLiteral::kShallowElements));
   DeepCopyHints copy_hints =
-      (flags & ObjectLiteral::kShallowProperties) ? kObjectIsShallow : kNoHints;
+      (flags & AggregateLiteral::kIsShallow) ? kObjectIsShallow : kNoHints;
   if (FLAG_track_double_fields && !FLAG_unbox_double_fields) {
     // Make sure we properly clone mutable heap numbers on 32-bit platforms.
     copy_hints = kNoHints;
@@ -475,8 +472,13 @@ MaybeHandle<JSObject> CreateLiteral(Isolate* isolate,
     site = Handle<AllocationSite>::cast(literal_site);
     boilerplate = Handle<JSObject>(site->boilerplate(), isolate);
   } else {
-    // Instantiate a JSArray or JSObject literal from the given {description}.
-    if (IsUninitializedLiteralSite(literal_site)) {
+    // Eagerly create AllocationSites for literals that contain an Array.
+    bool needs_initial_allocation_site =
+        (flags & AggregateLiteral::kNeedsInitialAllocationSite) != 0;
+    // TODO(cbruni): Even in the case where we need an initial allocation site
+    // we could still create the boilerplate lazily to save memory.
+    if (!needs_initial_allocation_site &&
+        IsUninitializedLiteralSite(*literal_site)) {
       PreInitializeLiteralSite(vector, literals_slot);
       boilerplate =
           Boilerplate::Create(isolate, description, flags, NOT_TENURED);
@@ -557,7 +559,7 @@ RUNTIME_FUNCTION(Runtime_CreateRegExpLiteral) {
   if (!HasBoilerplate(isolate, literal_site)) {
     ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
         isolate, boilerplate, JSRegExp::New(pattern, JSRegExp::Flags(flags)));
-    if (IsUninitializedLiteralSite(literal_site)) {
+    if (IsUninitializedLiteralSite(*literal_site)) {
       PreInitializeLiteralSite(vector, literal_slot);
       return *boilerplate;
     }

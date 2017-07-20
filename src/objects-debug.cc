@@ -344,7 +344,7 @@ bool JSObject::ElementsAreSafeToExamine() {
 
 
 void JSObject::JSObjectVerify() {
-  VerifyPointer(properties());
+  VerifyPointer(raw_properties_or_hash());
   VerifyHeapPointer(elements());
 
   CHECK_IMPLIES(HasSloppyArgumentsElements(), IsJSArgumentsObject());
@@ -675,7 +675,9 @@ void String::StringVerify() {
 
 
 void ConsString::ConsStringVerify() {
-  CHECK(this->first()->IsString() && this->second()->IsString());
+  CHECK(this->first()->IsString());
+  CHECK(this->second() == GetHeap()->empty_string() ||
+        this->second()->IsString());
   CHECK(this->length() >= ConsString::kMinLength);
   CHECK(this->length() == this->first()->length() + this->second()->length());
   if (this->IsFlat()) {
@@ -748,7 +750,8 @@ void SharedFunctionInfo::SharedFunctionInfoVerify() {
   CHECK(function_identifier()->IsUndefined(isolate) || HasBuiltinFunctionId() ||
         HasInferredName());
 
-  int expected_map_index = Context::FunctionMapIndex(language_mode(), kind());
+  int expected_map_index = Context::FunctionMapIndex(
+      language_mode(), kind(), has_shared_name(), needs_home_object());
   CHECK_EQ(expected_map_index, function_map_index());
 
   if (scope_info()->length() > 0) {
@@ -767,7 +770,7 @@ void JSGlobalProxy::JSGlobalProxyVerify() {
   JSObjectVerify();
   VerifyObjectField(JSGlobalProxy::kNativeContextOffset);
   // Make sure that this object has no properties, elements.
-  CHECK_EQ(GetHeap()->empty_fixed_array(), properties());
+  CHECK_EQ(GetHeap()->empty_fixed_array(), raw_properties_or_hash());
   CHECK_EQ(0, FixedArray::cast(elements())->length());
 }
 
@@ -1624,7 +1627,12 @@ static bool CheckOneBackPointer(Map* current_map, Object* target) {
 // static
 bool TransitionArray::IsConsistentWithBackPointers(Map* map) {
   Object* transitions = map->raw_transitions();
+  Heap* heap = map->GetHeap();
   for (int i = 0; i < TransitionArray::NumberOfTransitions(transitions); ++i) {
+    // Back pointers of shortcut transitions don't point to source maps.
+    Name* name = TransitionArray::GetKey(transitions, i);
+    if (IsShortcutTransition(heap, name)) continue;
+
     Map* target = TransitionArray::GetTarget(transitions, i);
     if (!CheckOneBackPointer(map, target)) return false;
   }

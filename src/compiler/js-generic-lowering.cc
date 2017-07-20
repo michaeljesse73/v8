@@ -79,7 +79,6 @@ REPLACE_STUB_CALL(ToNumber)
 REPLACE_STUB_CALL(ToName)
 REPLACE_STUB_CALL(ToObject)
 REPLACE_STUB_CALL(ToString)
-REPLACE_STUB_CALL(ToPrimitiveToString)
 #undef REPLACE_STUB_CALL
 
 void JSGenericLowering::ReplaceWithStubCall(Node* node, Callable callable,
@@ -154,19 +153,6 @@ void JSGenericLowering::LowerJSTypeOf(Node* node) {
                       Operator::kEliminatable);
 }
 
-void JSGenericLowering::LowerJSStringConcat(Node* node) {
-  CallDescriptor::Flags flags = FrameStateFlagForCall(node);
-  int operand_count = StringConcatParameterOf(node->op()).operand_count();
-  Callable callable = Builtins::CallableFor(isolate(), Builtins::kStringConcat);
-  const CallInterfaceDescriptor& descriptor = callable.descriptor();
-  CallDescriptor* desc = Linkage::GetStubCallDescriptor(
-      isolate(), zone(), descriptor, operand_count, flags,
-      node->op()->properties());
-  Node* stub_code = jsgraph()->HeapConstant(callable.code());
-  node->InsertInput(zone(), 0, stub_code);
-  node->InsertInput(zone(), 1, jsgraph()->Int32Constant(operand_count));
-  NodeProperties::ChangeOp(node, common()->Call(desc));
-}
 
 void JSGenericLowering::LowerJSLoadProperty(Node* node) {
   CallDescriptor::Flags flags = FrameStateFlagForCall(node);
@@ -479,7 +465,7 @@ void JSGenericLowering::LowerJSCreateLiteralArray(Node* node) {
 
   // Use the FastCloneShallowArray builtin only for shallow boilerplates without
   // properties up to the number of elements that the stubs can handle.
-  if ((p.flags() & ArrayLiteral::kShallowElements) != 0 &&
+  if ((p.flags() & AggregateLiteral::kIsShallow) != 0 &&
       p.length() < ConstructorBuiltins::kMaximumClonedShallowArrayElements) {
     Callable callable = CodeFactory::FastCloneShallowArray(
         isolate(), DONT_TRACK_ALLOCATION_SITE);
@@ -490,6 +476,14 @@ void JSGenericLowering::LowerJSCreateLiteralArray(Node* node) {
   }
 }
 
+void JSGenericLowering::LowerJSCreateEmptyLiteralArray(Node* node) {
+  CallDescriptor::Flags flags = FrameStateFlagForCall(node);
+  int literal_index = OpParameter<int>(node->op());
+  node->InsertInput(zone(), 1, jsgraph()->SmiConstant(literal_index));
+  Callable callable =
+      Builtins::CallableFor(isolate(), Builtins::kCreateEmptyArrayLiteral);
+  ReplaceWithStubCall(node, callable, flags);
+}
 
 void JSGenericLowering::LowerJSCreateLiteralObject(Node* node) {
   CreateLiteralParameters const& p = CreateLiteralParametersOf(node->op());
@@ -500,7 +494,7 @@ void JSGenericLowering::LowerJSCreateLiteralObject(Node* node) {
 
   // Use the FastCloneShallowObject builtin only for shallow boilerplates
   // without elements up to the number of properties that the stubs can handle.
-  if ((p.flags() & ObjectLiteral::kShallowProperties) != 0 &&
+  if ((p.flags() & AggregateLiteral::kIsShallow) != 0 &&
       p.length() <=
           ConstructorBuiltins::kMaximumClonedShallowObjectProperties) {
     Callable callable =
@@ -637,9 +631,6 @@ void JSGenericLowering::LowerJSCallForwardVarargs(Node* node) {
   int const arg_count = static_cast<int>(p.arity() - 2);
   CallDescriptor::Flags flags = FrameStateFlagForCall(node);
   Callable callable = CodeFactory::CallForwardVarargs(isolate());
-  if (p.tail_call_mode() == TailCallMode::kAllow) {
-    flags |= CallDescriptor::kSupportsTailCalls;
-  }
   CallDescriptor* desc = Linkage::GetStubCallDescriptor(
       isolate(), zone(), callable.descriptor(), arg_count + 1, flags);
   Node* stub_code = jsgraph()->HeapConstant(callable.code());
@@ -657,9 +648,6 @@ void JSGenericLowering::LowerJSCall(Node* node) {
   ConvertReceiverMode const mode = p.convert_mode();
   Callable callable = CodeFactory::Call(isolate(), mode);
   CallDescriptor::Flags flags = FrameStateFlagForCall(node);
-  if (p.tail_call_mode() == TailCallMode::kAllow) {
-    flags |= CallDescriptor::kSupportsTailCalls;
-  }
   CallDescriptor* desc = Linkage::GetStubCallDescriptor(
       isolate(), zone(), callable.descriptor(), arg_count + 1, flags);
   Node* stub_code = jsgraph()->HeapConstant(callable.code());

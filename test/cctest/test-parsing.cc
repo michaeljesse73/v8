@@ -7368,7 +7368,6 @@ TEST(DestructuringPositiveTests) {
     "[{x:x, y:y, ...z}, [a,b,c]]",
     "[{x:x = 1, y:y = 2, ...z}, [a = 3, b = 4, c = 5]]",
     "{...x}",
-    "{...{ x = 5} }",
     "{x, ...y}",
     "{x = 42, y = 15, ...z}",
     "{42 : x = 42, ...y}",
@@ -7459,6 +7458,9 @@ TEST(DestructuringNegativeTests) {
         "{ x : y++ }",
         "[a++]",
         "(x => y)",
+        "(async x => y)",
+        "((x, z) => y)",
+        "(async (x, z) => y)",
         "a[i]", "a()",
         "a.b",
         "new a",
@@ -7473,6 +7475,8 @@ TEST(DestructuringNegativeTests) {
         "a <<< a",
         "a >>> a",
         "function a() {}",
+        "function* a() {}",
+        "async function a() {}",
         "a`bcd`",
         "this",
         "null",
@@ -7536,6 +7540,17 @@ TEST(DestructuringNegativeTests) {
       "{ ...method() {} }",
       "{ ...function() {} }",
       "{ ...*method() {} }",
+      "{...{x} }",
+      "{...[x] }",
+      "{...{ x = 5 } }",
+      "{...[ x = 5 ] }",
+      "{...x.f }",
+      "{...x[0] }",
+      NULL
+    };
+
+    const char* async_gen_data[] = {
+      "async function* a() {}",
       NULL
     };
 
@@ -7547,6 +7562,9 @@ TEST(DestructuringNegativeTests) {
                       arraysize(flags));
     RunParserSyncTest(context_data, rest_data, kError, NULL, 0, flags,
                       arraysize(flags));
+    static const ParserFlag async_gen_flags[] = {kAllowHarmonyAsyncIteration};
+    RunParserSyncTest(context_data, async_gen_data, kError, NULL, 0,
+                      async_gen_flags, arraysize(async_gen_flags));
   }
 
   {  // All modes.
@@ -7842,6 +7860,9 @@ TEST(DestructuringAssignmentPositiveTests) {
     "{x: { y = 10 } }",
     "[(({ x } = { x: 1 }) => x).a]",
 
+    "{ ...d.x }",
+    "{ ...c[0]}",
+
     // v8:4662
     "{ x: (y) }",
     "{ x: (y) = [] }",
@@ -7856,9 +7877,12 @@ TEST(DestructuringAssignmentPositiveTests) {
 
     NULL};
   // clang-format on
-  RunParserSyncTest(context_data, data, kSuccess);
+  static const ParserFlag flags[] = {kAllowHarmonyObjectRestSpread};
+  RunParserSyncTest(context_data, data, kSuccess, NULL, 0, flags,
+                    arraysize(flags));
 
-  RunParserSyncTest(mixed_assignments_context_data, data, kSuccess);
+  RunParserSyncTest(mixed_assignments_context_data, data, kSuccess, NULL, 0,
+                    flags, arraysize(flags));
 
   const char* empty_context_data[][2] = {
       {"'use strict';", ""}, {"", ""}, {NULL, NULL}};
@@ -7922,9 +7946,13 @@ TEST(DestructuringAssignmentNegativeTests) {
     "[super]",
     "[super = 1]",
     "[function f() {}]",
+    "[async function f() {}]",
+    "[function* f() {}]",
     "[50]",
     "[(50)]",
     "[(function() {})]",
+    "[(async function() {})]",
+    "[(function*() {})]",
     "[(foo())]",
     "{ x: 50 }",
     "{ x: (50) }",
@@ -7932,11 +7960,21 @@ TEST(DestructuringAssignmentNegativeTests) {
     "{ x: 'str' }",
     "{ x: ('str') }",
     "{ x: (foo()) }",
+    "{ x: function() {} }",
+    "{ x: async function() {} }",
+    "{ x: function*() {} }",
     "{ x: (function() {}) }",
+    "{ x: (async function() {}) }",
+    "{ x: (function*() {}) }",
     "{ x: y } = 'str'",
     "[x, y] = 'str'",
     "[(x,y) => z]",
+    "[async(x,y) => z]",
+    "[async x => z]",
     "{x: (y) => z}",
+    "{x: (y,w) => z}",
+    "{x: async (y) => z}",
+    "{x: async (y,w) => z}",
     "[x, ...y, z]",
     "[...x,]",
     "[x, y, ...z = 1]",
@@ -8725,11 +8763,8 @@ TEST(FunctionDeclarationError) {
     "if (true) {} else label: function f() {}",
     "if (true) function* f() { }",
     "label: function* f() { }",
-    // TODO(littledan, v8:4806): Ban duplicate generator declarations in
-    // a block, maybe by tracking whether a Variable is a generator declaration
-    // "{ function* f() {} function* f() {} }",
-    // "{ function f() {} function* f() {} }",
-    // "{ function* f() {} function f() {} }",
+    "if (true) async function f() { }",
+    "label: async function f() { }",
     NULL
   };
   // Valid only in sloppy mode.
@@ -8751,6 +8786,20 @@ TEST(FunctionDeclarationError) {
   // In sloppy mode, sloppy_data is successful
   RunParserSyncTest(sloppy_context, error_data, kError);
   RunParserSyncTest(sloppy_context, sloppy_data, kSuccess);
+
+  // No single statement async iterators
+  // clang-format off
+  const char* async_iterator_data[] = {
+    "if (true) async function* f() { }",
+    "label: async function* f() { }",
+    NULL,
+  };
+  // clang-format on
+  static const ParserFlag flags[] = {kAllowHarmonyAsyncIteration};
+  RunParserSyncTest(sloppy_context, async_iterator_data, kError, NULL, 0, flags,
+                    arraysize(flags));
+  RunParserSyncTest(strict_context, async_iterator_data, kError, NULL, 0, flags,
+                    arraysize(flags));
 }
 
 TEST(ExponentiationOperator) {
@@ -9142,6 +9191,7 @@ TEST(AsyncAwaitModuleErrors) {
     "export async function await() {}",
     "export async function() {}",
     "export async",
+    "export async\nfunction async() { await 1; }",
     NULL
   };
   // clang-format on

@@ -61,8 +61,6 @@ BytecodeArrayBuilder::BytecodeArrayBuilder(
         zone, &register_allocator_, fixed_register_count(), parameter_count,
         new (zone) RegisterTransferWriter(this));
   }
-
-  return_position_ = literal ? literal->return_position() : kNoSourcePosition;
 }
 
 Register BytecodeArrayBuilder::Parameter(int parameter_index) const {
@@ -121,22 +119,18 @@ BytecodeSourceInfo BytecodeArrayBuilder::CurrentSourcePosition(
 void BytecodeArrayBuilder::SetDeferredSourceInfo(
     BytecodeSourceInfo source_info) {
   if (!source_info.is_valid()) return;
-  if (deferred_source_info_.is_valid()) {
-    // Emit any previous deferred source info now as a nop.
-    BytecodeNode node = BytecodeNode::Nop(deferred_source_info_);
-    bytecode_array_writer_.Write(&node);
-  }
   deferred_source_info_ = source_info;
 }
 
 void BytecodeArrayBuilder::AttachOrEmitDeferredSourceInfo(BytecodeNode* node) {
   if (!deferred_source_info_.is_valid()) return;
-
   if (!node->source_info().is_valid()) {
     node->set_source_info(deferred_source_info_);
-  } else {
-    BytecodeNode node = BytecodeNode::Nop(deferred_source_info_);
-    bytecode_array_writer_.Write(&node);
+  } else if (deferred_source_info_.is_statement() &&
+             node->source_info().is_expression()) {
+    BytecodeSourceInfo source_position = node->source_info();
+    source_position.MakeStatementPosition(source_position.source_position());
+    node->set_source_info(source_position);
   }
   deferred_source_info_.set_invalid();
 }
@@ -642,7 +636,7 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::LoadAccumulatorWithRegister(
     Register reg) {
   if (register_optimizer_) {
     // Defer source info so that if we elide the bytecode transfer, we attach
-    // the source info to a subsequent bytecode or to a nop.
+    // the source info to a subsequent bytecode if it exists.
     SetDeferredSourceInfo(CurrentSourcePosition(Bytecode::kLdar));
     register_optimizer_->DoLdar(reg);
   } else {
@@ -655,7 +649,7 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::StoreAccumulatorInRegister(
     Register reg) {
   if (register_optimizer_) {
     // Defer source info so that if we elide the bytecode transfer, we attach
-    // the source info to a subsequent bytecode or to a nop.
+    // the source info to a subsequent bytecode if it exists.
     SetDeferredSourceInfo(CurrentSourcePosition(Bytecode::kStar));
     register_optimizer_->DoStar(reg);
   } else {
@@ -669,7 +663,7 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::MoveRegister(Register from,
   DCHECK(from != to);
   if (register_optimizer_) {
     // Defer source info so that if we elide the bytecode transfer, we attach
-    // the source info to a subsequent bytecode or to a nop.
+    // the source info to a subsequent bytecode if it exists.
     SetDeferredSourceInfo(CurrentSourcePosition(Bytecode::kMov));
     register_optimizer_->DoMov(from, to);
   } else {
@@ -960,6 +954,12 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::CreateRegExpLiteral(
   return *this;
 }
 
+BytecodeArrayBuilder& BytecodeArrayBuilder::CreateEmptyArrayLiteral(
+    int literal_index) {
+  OutputCreateEmptyArrayLiteral(literal_index);
+  return *this;
+}
+
 BytecodeArrayBuilder& BytecodeArrayBuilder::CreateArrayLiteral(
     size_t constant_elements_entry, int literal_index, int flags) {
   OutputCreateArrayLiteral(constant_elements_entry, literal_index, flags);
@@ -997,18 +997,6 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::ToName(Register out) {
 BytecodeArrayBuilder& BytecodeArrayBuilder::ToNumber(Register out,
                                                      int feedback_slot) {
   OutputToNumber(out, feedback_slot);
-  return *this;
-}
-
-BytecodeArrayBuilder& BytecodeArrayBuilder::ToPrimitiveToString(
-    Register out, int feedback_slot) {
-  OutputToPrimitiveToString(out, feedback_slot);
-  return *this;
-}
-
-BytecodeArrayBuilder& BytecodeArrayBuilder::StringConcat(
-    RegisterList operand_registers) {
-  OutputStringConcat(operand_registers, operand_registers.register_count());
   return *this;
 }
 
@@ -1185,7 +1173,6 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::ReThrow() {
 }
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::Return() {
-  SetReturnPosition();
   OutputReturn();
   return_seen_in_block_ = true;
   return *this;
@@ -1258,9 +1245,8 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::LoadModuleVariable(int cell_index,
 }
 
 BytecodeArrayBuilder& BytecodeArrayBuilder::SuspendGenerator(
-    Register generator, RegisterList registers, SuspendFlags flags) {
-  OutputSuspendGenerator(generator, registers, registers.register_count(),
-                         SuspendGeneratorBytecodeFlags::Encode(flags));
+    Register generator, RegisterList registers) {
+  OutputSuspendGenerator(generator, registers, registers.register_count());
   return *this;
 }
 
@@ -1336,13 +1322,6 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::CallAnyReceiver(Register callable,
                                                             RegisterList args,
                                                             int feedback_slot) {
   OutputCallAnyReceiver(callable, args, args.register_count(), feedback_slot);
-  return *this;
-}
-
-BytecodeArrayBuilder& BytecodeArrayBuilder::TailCall(Register callable,
-                                                     RegisterList args,
-                                                     int feedback_slot) {
-  OutputTailCall(callable, args, args.register_count(), feedback_slot);
   return *this;
 }
 
@@ -1463,11 +1442,6 @@ size_t BytecodeArrayBuilder::AllocateDeferredConstantPoolEntry() {
 void BytecodeArrayBuilder::SetDeferredConstantPoolEntry(size_t entry,
                                                         Handle<Object> object) {
   constant_array_builder()->SetDeferredAt(entry, object);
-}
-
-void BytecodeArrayBuilder::SetReturnPosition() {
-  if (return_position_ == kNoSourcePosition) return;
-  latest_source_info_.MakeStatementPosition(return_position_);
 }
 
 bool BytecodeArrayBuilder::RegisterIsValid(Register reg) const {

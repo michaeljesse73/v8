@@ -134,18 +134,25 @@ struct WasmDataSegment {
 
 // Static representation of a wasm indirect call table.
 struct WasmIndirectFunctionTable {
-  uint32_t min_size;            // minimum table size.
-  uint32_t max_size;            // maximum table size.
-  bool has_max;                 // true if there is a maximum size.
+  MOVE_ONLY_WITH_DEFAULT_CONSTRUCTORS(WasmIndirectFunctionTable);
+
+  uint32_t min_size = 0;  // minimum table size.
+  uint32_t max_size = 0;  // maximum table size.
+  bool has_max = false;   // true if there is a maximum size.
   // TODO(titzer): Move this to WasmInstance. Needed by interpreter only.
   std::vector<int32_t> values;  // function table, -1 indicating invalid.
-  bool imported;                // true if imported.
-  bool exported;                // true if exported.
+  bool imported = false;        // true if imported.
+  bool exported = false;        // true if exported.
   SignatureMap map;             // canonicalizing map for sig indexes.
 };
 
 // Static representation of how to initialize a table.
 struct WasmTableInit {
+  MOVE_ONLY_NO_DEFAULT_CONSTRUCTOR(WasmTableInit);
+
+  WasmTableInit(uint32_t table_index, WasmInitExpr offset)
+      : table_index(table_index), offset(offset) {}
+
   uint32_t table_index;
   WasmInitExpr offset;
   std::vector<uint32_t> entries;
@@ -172,6 +179,8 @@ struct ModuleWireBytes;
 
 // Static representation of a module.
 struct V8_EXPORT_PRIVATE WasmModule {
+  MOVE_ONLY_NO_DEFAULT_CONSTRUCTOR(WasmModule);
+
   static const uint32_t kPageSize = 0x10000;    // Page size, 64kb.
   static const uint32_t kMinMemPages = 1;       // Minimum memory size = 64kb
 
@@ -216,6 +225,8 @@ typedef Managed<WasmModule> WasmModuleWrapper;
 
 // An instantiated wasm module, including memory, function table, etc.
 struct WasmInstance {
+  MOVE_ONLY_NO_DEFAULT_CONSTRUCTOR(WasmInstance);
+
   const WasmModule* module;  // static representation of the module.
   // -- Heap allocated --------------------------------------------------------
   Handle<Context> context;               // JavaScript native context.
@@ -313,6 +324,8 @@ struct V8_EXPORT_PRIVATE ModuleWireBytes {
 // Interface provided to the decoder/graph builder which contains only
 // minimal information about the globals, functions, and function tables.
 struct V8_EXPORT_PRIVATE ModuleEnv {
+  MOVE_ONLY_NO_DEFAULT_CONSTRUCTOR(ModuleEnv);
+
   ModuleEnv(const WasmModule* module, WasmInstance* instance)
       : module(module),
         instance(instance),
@@ -546,6 +559,7 @@ void ValidateModuleState(Isolate* isolate, Handle<WasmModuleObject> module_obj);
 void ValidateOrphanedInstance(Isolate* isolate,
                               Handle<WasmInstanceObject> instance);
 }  // namespace testing
+
 }  // namespace wasm
 }  // namespace internal
 }  // namespace v8

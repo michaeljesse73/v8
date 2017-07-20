@@ -485,8 +485,7 @@ void Generate_JSBuiltinsConstructStubHelper(MacroAssembler* masm) {
     {
       ConstantPoolUnavailableScope constant_pool_unavailable(masm);
       ParameterCount actual(r3);
-      __ InvokeFunction(r4, r6, actual, CALL_FUNCTION,
-                        CheckDebugStepCallWrapper());
+      __ InvokeFunction(r4, r6, actual, CALL_FUNCTION);
     }
 
     // Restore context from the frame.
@@ -613,8 +612,7 @@ void Generate_JSConstructStubGeneric(MacroAssembler* masm,
     {
       ConstantPoolUnavailableScope constant_pool_unavailable(masm);
       ParameterCount actual(r3);
-      __ InvokeFunction(r4, r6, actual, CALL_FUNCTION,
-                        CheckDebugStepCallWrapper());
+      __ InvokeFunction(r4, r6, actual, CALL_FUNCTION);
     }
 
     // ----------- S t a t e -------------
@@ -2485,8 +2483,7 @@ void Builtins::Generate_CallFunction(MacroAssembler* masm,
       r5, FieldMemOperand(r5, SharedFunctionInfo::kFormalParameterCountOffset));
   ParameterCount actual(r3);
   ParameterCount expected(r5);
-  __ InvokeFunctionCode(r4, no_reg, expected, actual, JUMP_FUNCTION,
-                        CheckDebugStepCallWrapper());
+  __ InvokeFunctionCode(r4, no_reg, expected, actual, JUMP_FUNCTION);
 
   // The function is a "classConstructor", need to raise an exception.
   __ bind(&class_constructor);
@@ -2633,22 +2630,12 @@ void Builtins::Generate_Call(MacroAssembler* masm, ConvertReceiverMode mode,
   __ TestBit(r7, Map::kIsCallable, r0);
   __ beq(&non_callable, cr0);
 
+  // Check if target is a proxy and call CallProxy external builtin
   __ cmpi(r8, Operand(JS_PROXY_TYPE));
-  __ bne(&non_function);
-
-  // 0. Prepare for tail call if necessary.
-  if (tail_call_mode == TailCallMode::kAllow) {
-    PrepareForTailCall(masm, r3, r6, r7, r8);
-  }
-
-  // 1. Runtime fallback for Proxy [[Call]].
-  __ Push(r4);
-  // Increase the arguments size to include the pushed function and the
-  // existing receiver on the stack.
-  __ addi(r3, r3, Operand(2));
-  // Tail-call to the runtime.
-  __ JumpToExternalReference(
-      ExternalReference(Runtime::kJSProxyCall, masm->isolate()));
+  __ mov(r8, Operand(ExternalReference(Builtins::kCallProxy, masm->isolate())));
+  __ LoadP(r8, MemOperand(r8));
+  __ addi(r8, r8, Code::kHeaderSize - kHeapObjectTag);
+  __ JumpToJSEntry(r8);
 
   // 2. Call to something else, which might have a [[Call]] internal method (if
   // not we raise an exception).
