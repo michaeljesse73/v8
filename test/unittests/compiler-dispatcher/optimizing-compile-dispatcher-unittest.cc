@@ -19,18 +19,19 @@
 namespace v8 {
 namespace internal {
 
-typedef TestWithContext OptimizingCompileDispatcherTest;
+typedef TestWithNativeContext OptimizingCompileDispatcherTest;
 
 namespace {
 
 class BlockingCompilationJob : public CompilationJob {
  public:
   BlockingCompilationJob(Isolate* isolate, Handle<JSFunction> function)
-      : CompilationJob(isolate, &info_, "BlockingCompilationJob",
+      : CompilationJob(isolate->stack_guard()->real_climit(), &parse_info_,
+                       &info_, "BlockingCompilationJob",
                        State::kReadyToExecute),
-        parse_info_(handle(function->shared())),
-        info_(parse_info_.zone(), &parse_info_, function->GetIsolate(),
-              function),
+        shared_(function->shared()),
+        parse_info_(shared_),
+        info_(parse_info_.zone(), function->GetIsolate(), shared_, function),
         blocking_(false),
         semaphore_(0) {}
   ~BlockingCompilationJob() override = default;
@@ -39,9 +40,7 @@ class BlockingCompilationJob : public CompilationJob {
   void Signal() { semaphore_.Signal(); }
 
   // CompilationJob implementation.
-  Status PrepareJobImpl() override {
-    UNREACHABLE();
-  }
+  Status PrepareJobImpl(Isolate* isolate) override { UNREACHABLE(); }
 
   Status ExecuteJobImpl() override {
     blocking_.SetValue(true);
@@ -50,9 +49,10 @@ class BlockingCompilationJob : public CompilationJob {
     return SUCCEEDED;
   }
 
-  Status FinalizeJobImpl() override { return SUCCEEDED; }
+  Status FinalizeJobImpl(Isolate* isolate) override { return SUCCEEDED; }
 
  private:
+  Handle<SharedFunctionInfo> shared_;
   ParseInfo parse_info_;
   CompilationInfo info_;
   base::AtomicValue<bool> blocking_;
@@ -70,8 +70,8 @@ TEST_F(OptimizingCompileDispatcherTest, Construct) {
 }
 
 TEST_F(OptimizingCompileDispatcherTest, NonBlockingFlush) {
-  Handle<JSFunction> fun = Handle<JSFunction>::cast(test::RunJS(
-      isolate(), "function f() { function g() {}; return g;}; f();"));
+  Handle<JSFunction> fun =
+      RunJS<JSFunction>("function f() { function g() {}; return g;}; f();");
   BlockingCompilationJob* job = new BlockingCompilationJob(i_isolate(), fun);
 
   OptimizingCompileDispatcher dispatcher(i_isolate());

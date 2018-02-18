@@ -6,7 +6,6 @@
 #define V8_COMPILER_JS_BUILTIN_REDUCER_H_
 
 #include "src/base/compiler-specific.h"
-#include "src/base/flags.h"
 #include "src/compiler/graph-reducer.h"
 #include "src/globals.h"
 
@@ -30,14 +29,7 @@ class TypeCache;
 class V8_EXPORT_PRIVATE JSBuiltinReducer final
     : public NON_EXPORTED_BASE(AdvancedReducer) {
  public:
-  // Flags that control the mode of operation.
-  enum Flag {
-    kNoFlags = 0u,
-    kDeoptimizationEnabled = 1u << 0,
-  };
-  typedef base::Flags<Flag> Flags;
-
-  JSBuiltinReducer(Editor* editor, JSGraph* jsgraph, Flags flags,
+  JSBuiltinReducer(Editor* editor, JSGraph* jsgraph,
                    CompilationDependencies* dependencies,
                    Handle<Context> native_context);
   ~JSBuiltinReducer() final {}
@@ -47,32 +39,32 @@ class V8_EXPORT_PRIVATE JSBuiltinReducer final
   Reduction Reduce(Node* node) final;
 
  private:
+  enum class ArrayIteratorKind { kArray, kTypedArray };
+
   Reduction ReduceArrayIterator(Node* node, IterationKind kind);
   Reduction ReduceTypedArrayIterator(Node* node, IterationKind kind);
   Reduction ReduceArrayIterator(Handle<Map> receiver_map, Node* node,
                                 IterationKind kind,
                                 ArrayIteratorKind iter_kind);
   Reduction ReduceArrayIteratorNext(Node* node);
-  Reduction ReduceFastArrayIteratorNext(Handle<Map> iterator_map, Node* node,
+  Reduction ReduceFastArrayIteratorNext(InstanceType type, Node* node,
                                         IterationKind kind);
-  Reduction ReduceTypedArrayIteratorNext(Handle<Map> iterator_map, Node* node,
+  Reduction ReduceTypedArrayIteratorNext(InstanceType type, Node* node,
                                          IterationKind kind);
+  Reduction ReduceTypedArrayToStringTag(Node* node);
   Reduction ReduceArrayIsArray(Node* node);
-  Reduction ReduceArrayPop(Node* node);
-  Reduction ReduceArrayPush(Node* node);
-  Reduction ReduceArrayShift(Node* node);
+
   Reduction ReduceCollectionIterator(Node* node,
                                      InstanceType collection_instance_type,
                                      int collection_iterator_map_index);
   Reduction ReduceCollectionSize(Node* node,
                                  InstanceType collection_instance_type);
   Reduction ReduceCollectionIteratorNext(
-      Node* node, int entry_size,
+      Node* node, int entry_size, Handle<HeapObject> empty_collection,
       InstanceType collection_iterator_instance_type_first,
       InstanceType collection_iterator_instance_type_last);
   Reduction ReduceDateNow(Node* node);
   Reduction ReduceDateGetTime(Node* node);
-  Reduction ReduceFunctionBind(Node* node);
   Reduction ReduceGlobalIsFinite(Node* node);
   Reduction ReduceGlobalIsNaN(Node* node);
   Reduction ReduceMapHas(Node* node);
@@ -116,15 +108,14 @@ class V8_EXPORT_PRIVATE JSBuiltinReducer final
   Reduction ReduceNumberIsSafeInteger(Node* node);
   Reduction ReduceNumberParseInt(Node* node);
   Reduction ReduceObjectCreate(Node* node);
-  Reduction ReduceStringCharAt(Node* node);
-  Reduction ReduceStringCharCodeAt(Node* node);
   Reduction ReduceStringConcat(Node* node);
   Reduction ReduceStringFromCharCode(Node* node);
-  Reduction ReduceStringIndexOf(Node* node);
   Reduction ReduceStringIterator(Node* node);
   Reduction ReduceStringIteratorNext(Node* node);
+  Reduction ReduceStringSlice(Node* node);
   Reduction ReduceStringToLowerCaseIntl(Node* node);
   Reduction ReduceStringToUpperCaseIntl(Node* node);
+  Reduction ReduceArrayBufferIsView(Node* node);
   Reduction ReduceArrayBufferViewAccessor(Node* node,
                                           InstanceType instance_type,
                                           FieldAccess const& access);
@@ -132,7 +123,6 @@ class V8_EXPORT_PRIVATE JSBuiltinReducer final
   Node* ToNumber(Node* value);
   Node* ToUint32(Node* value);
 
-  Flags flags() const { return flags_; }
   Graph* graph() const;
   Factory* factory() const;
   JSGraph* jsgraph() const { return jsgraph_; }
@@ -144,13 +134,10 @@ class V8_EXPORT_PRIVATE JSBuiltinReducer final
   CompilationDependencies* dependencies() const { return dependencies_; }
 
   CompilationDependencies* const dependencies_;
-  Flags const flags_;
   JSGraph* const jsgraph_;
   Handle<Context> const native_context_;
   TypeCache const& type_cache_;
 };
-
-DEFINE_OPERATORS_FOR_FLAGS(JSBuiltinReducer::Flags)
 
 }  // namespace compiler
 }  // namespace internal

@@ -54,6 +54,8 @@ class PerfJitLogger : public CodeEventLogger {
   uint64_t GetTimestamp();
   void LogRecordedBuffer(AbstractCode* code, SharedFunctionInfo* shared,
                          const char* name, int length) override;
+  void LogRecordedBuffer(const InstructionStream* stream, const char* name,
+                         int length) override;
 
   // Extension added to V8 log file name to get the low-level log name.
   static const char kFilenameFormatString[];
@@ -126,9 +128,15 @@ class PerfJitLogger : public CodeEventLogger {
                          const char* name, int length) override {
     UNIMPLEMENTED();
   }
+
+  void LogRecordedBuffer(const InstructionStream* stream, const char* name,
+                         int length) override {
+    UNIMPLEMENTED();
+  }
 };
 
 #endif  // V8_OS_LINUX
 }  // namespace internal
 }  // namespace v8
-#endif
+
+#endif  // V8_PERF_JIT_H_

@@ -14,6 +14,7 @@ namespace v8 {
 namespace internal {
 
 class AbstractCode;
+class InstructionStream;
 class Name;
 class SharedFunctionInfo;
 class String;
@@ -27,46 +28,15 @@ class String;
   V(SHARED_FUNC_MOVE_EVENT, "sfi-move")                                  \
   V(SNAPSHOT_CODE_NAME_EVENT, "snapshot-code-name")                      \
   V(TICK_EVENT, "tick")                                                  \
-  V(REPEAT_META_EVENT, "repeat")                                         \
   V(BUILTIN_TAG, "Builtin")                                              \
-  V(CALL_DEBUG_BREAK_TAG, "CallDebugBreak")                              \
-  V(CALL_DEBUG_PREPARE_STEP_IN_TAG, "CallDebugPrepareStepIn")            \
-  V(CALL_INITIALIZE_TAG, "CallInitialize")                               \
-  V(CALL_MEGAMORPHIC_TAG, "CallMegamorphic")                             \
-  V(CALL_MISS_TAG, "CallMiss")                                           \
-  V(CALL_NORMAL_TAG, "CallNormal")                                       \
-  V(LOAD_INITIALIZE_TAG, "LoadInitialize")                               \
-  V(LOAD_MEGAMORPHIC_TAG, "LoadMegamorphic")                             \
-  V(STORE_INITIALIZE_TAG, "StoreInitialize")                             \
-  V(STORE_GENERIC_TAG, "StoreGeneric")                                   \
-  V(STORE_MEGAMORPHIC_TAG, "StoreMegamorphic")                           \
-  V(KEYED_CALL_DEBUG_BREAK_TAG, "KeyedCallDebugBreak")                   \
-  V(KEYED_CALL_DEBUG_PREPARE_STEP_IN_TAG, "KeyedCallDebugPrepareStepIn") \
-  V(KEYED_CALL_INITIALIZE_TAG, "KeyedCallInitialize")                    \
-  V(KEYED_CALL_MEGAMORPHIC_TAG, "KeyedCallMegamorphic")                  \
-  V(KEYED_CALL_MISS_TAG, "KeyedCallMiss")                                \
-  V(KEYED_CALL_NORMAL_TAG, "KeyedCallNormal")                            \
   V(CALLBACK_TAG, "Callback")                                            \
   V(EVAL_TAG, "Eval")                                                    \
   V(FUNCTION_TAG, "Function")                                            \
   V(HANDLER_TAG, "Handler")                                              \
   V(BYTECODE_HANDLER_TAG, "BytecodeHandler")                             \
-  V(KEYED_LOAD_IC_TAG, "KeyedLoadIC")                                    \
-  V(KEYED_LOAD_POLYMORPHIC_IC_TAG, "KeyedLoadPolymorphicIC")             \
-  V(KEYED_EXTERNAL_ARRAY_LOAD_IC_TAG, "KeyedExternalArrayLoadIC")        \
-  V(KEYED_STORE_IC_TAG, "KeyedStoreIC")                                  \
-  V(KEYED_STORE_POLYMORPHIC_IC_TAG, "KeyedStorePolymorphicIC")           \
-  V(KEYED_EXTERNAL_ARRAY_STORE_IC_TAG, "KeyedExternalArrayStoreIC")      \
   V(LAZY_COMPILE_TAG, "LazyCompile")                                     \
-  V(CALL_IC_TAG, "CallIC")                                               \
-  V(LOAD_IC_TAG, "LoadIC")                                               \
-  V(LOAD_GLOBAL_IC_TAG, "LoadGlobalIC")                                  \
-  V(LOAD_POLYMORPHIC_IC_TAG, "LoadPolymorphicIC")                        \
   V(REG_EXP_TAG, "RegExp")                                               \
   V(SCRIPT_TAG, "Script")                                                \
-  V(STORE_IC_TAG, "StoreIC")                                             \
-  V(STORE_GLOBAL_IC_TAG, "StoreGlobalIC")                                \
-  V(STORE_POLYMORPHIC_IC_TAG, "StorePolymorphicIC")                      \
   V(STUB_TAG, "Stub")                                                    \
   V(NATIVE_FUNCTION_TAG, "Function")                                     \
   V(NATIVE_LAZY_COMPILE_TAG, "LazyCompile")                              \
@@ -95,12 +65,13 @@ class CodeEventListener {
   virtual void CodeCreateEvent(LogEventsAndTags tag, AbstractCode* code,
                                SharedFunctionInfo* shared, Name* source,
                                int line, int column) = 0;
-  virtual void CodeCreateEvent(LogEventsAndTags tag, AbstractCode* code,
-                               int args_count) = 0;
   virtual void CallbackEvent(Name* name, Address entry_point) = 0;
   virtual void GetterCallbackEvent(Name* name, Address entry_point) = 0;
   virtual void SetterCallbackEvent(Name* name, Address entry_point) = 0;
   virtual void RegExpCodeCreateEvent(AbstractCode* code, String* source) = 0;
+  virtual void InstructionStreamCreateEvent(LogEventsAndTags tag,
+                                            const InstructionStream* stream,
+                                            const char* description) = 0;
   virtual void CodeMoveEvent(AbstractCode* from, Address to) = 0;
   virtual void SharedFunctionInfoMoveEvent(Address from, Address to) = 0;
   virtual void CodeMovingGCEvent() = 0;
@@ -147,10 +118,6 @@ class CodeEventDispatcher {
     CODE_EVENT_DISPATCH(
         CodeCreateEvent(tag, code, shared, source, line, column));
   }
-  void CodeCreateEvent(LogEventsAndTags tag, AbstractCode* code,
-                       int args_count) {
-    CODE_EVENT_DISPATCH(CodeCreateEvent(tag, code, args_count));
-  }
   void CallbackEvent(Name* name, Address entry_point) {
     CODE_EVENT_DISPATCH(CallbackEvent(name, entry_point));
   }
@@ -162,6 +129,11 @@ class CodeEventDispatcher {
   }
   void RegExpCodeCreateEvent(AbstractCode* code, String* source) {
     CODE_EVENT_DISPATCH(RegExpCodeCreateEvent(code, source));
+  }
+  void InstructionStreamCreateEvent(LogEventsAndTags tag,
+                                    const InstructionStream* stream,
+                                    const char* description) {
+    CODE_EVENT_DISPATCH(InstructionStreamCreateEvent(tag, stream, description));
   }
   void CodeMoveEvent(AbstractCode* from, Address to) {
     CODE_EVENT_DISPATCH(CodeMoveEvent(from, to));

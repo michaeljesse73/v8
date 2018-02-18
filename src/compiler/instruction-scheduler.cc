@@ -90,10 +90,10 @@ InstructionScheduler::InstructionScheduler(Zone* zone,
 
 void InstructionScheduler::StartBlock(RpoNumber rpo) {
   DCHECK(graph_.empty());
-  DCHECK(last_side_effect_instr_ == nullptr);
+  DCHECK_NULL(last_side_effect_instr_);
   DCHECK(pending_loads_.empty());
-  DCHECK(last_live_in_reg_marker_ == nullptr);
-  DCHECK(last_deopt_or_trap_ == nullptr);
+  DCHECK_NULL(last_live_in_reg_marker_);
+  DCHECK_NULL(last_deopt_or_trap_);
   DCHECK(operands_map_.empty());
   sequence()->StartBlock(rpo);
 }
@@ -240,9 +240,13 @@ int InstructionScheduler::GetInstructionFlags(const Instruction* instr) const {
     case kArchNop:
     case kArchFramePointer:
     case kArchParentFramePointer:
-    case kArchTruncateDoubleToI:
-    case kArchStackSlot:
+    case kArchStackSlot:  // Despite its name this opcode will produce a
+                          // reference to a frame slot, so it is not affected
+                          // by the arm64 dual stack issues mentioned below.
     case kArchComment:
+      return kNoOpcodeFlags;
+
+    case kArchTruncateDoubleToI:
     case kIeee754Float64Acos:
     case kIeee754Float64Acosh:
     case kIeee754Float64Asin:
@@ -272,16 +276,19 @@ int InstructionScheduler::GetInstructionFlags(const Instruction* instr) const {
       return kIsLoadOperation;
 
     case kArchPrepareCallCFunction:
+    case kArchSaveCallerRegisters:
+    case kArchRestoreCallerRegisters:
     case kArchPrepareTailCall:
     case kArchCallCFunction:
     case kArchCallCodeObject:
     case kArchCallJSFunction:
+    case kArchCallWasmFunction:
       return kHasSideEffect;
 
     case kArchTailCallCodeObjectFromJSFunction:
     case kArchTailCallCodeObject:
-    case kArchTailCallJSFunctionFromJSFunction:
     case kArchTailCallAddress:
+    case kArchTailCallWasm:
       return kHasSideEffect | kIsBlockTerminator;
 
     case kArchDeoptimize:
@@ -289,26 +296,11 @@ int InstructionScheduler::GetInstructionFlags(const Instruction* instr) const {
     case kArchLookupSwitch:
     case kArchTableSwitch:
     case kArchRet:
+    case kArchDebugAbort:
     case kArchDebugBreak:
     case kArchThrowTerminator:
       return kIsBlockTerminator;
 
-    case kCheckedLoadInt8:
-    case kCheckedLoadUint8:
-    case kCheckedLoadInt16:
-    case kCheckedLoadUint16:
-    case kCheckedLoadWord32:
-    case kCheckedLoadWord64:
-    case kCheckedLoadFloat32:
-    case kCheckedLoadFloat64:
-      return kIsLoadOperation;
-
-    case kCheckedStoreWord8:
-    case kCheckedStoreWord16:
-    case kCheckedStoreWord32:
-    case kCheckedStoreWord64:
-    case kCheckedStoreFloat32:
-    case kCheckedStoreFloat64:
     case kArchStoreWithWriteBarrier:
       return kHasSideEffect;
 
@@ -373,7 +365,8 @@ int InstructionScheduler::GetInstructionFlags(const Instruction* instr) const {
 
 bool InstructionScheduler::IsBlockTerminator(const Instruction* instr) const {
   return ((GetInstructionFlags(instr) & kIsBlockTerminator) ||
-          (instr->flags_mode() == kFlags_branch));
+          (instr->flags_mode() == kFlags_branch) ||
+          (instr->flags_mode() == kFlags_branch_and_poison));
 }
 
 
@@ -382,7 +375,7 @@ void InstructionScheduler::ComputeTotalLatencies() {
     int max_latency = 0;
 
     for (ScheduleGraphNode* successor : node->successors()) {
-      DCHECK(successor->total_latency() != -1);
+      DCHECK_NE(-1, successor->total_latency());
       if (successor->total_latency() > max_latency) {
         max_latency = successor->total_latency();
       }

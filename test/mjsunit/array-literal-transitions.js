@@ -26,7 +26,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Flags: --allow-natives-syntax --expose-gc --ignition-osr --no-always-opt
-// Flags: --opt --no-stress-fullcodegen
+// Flags: --opt
 
 // IC and Crankshaft support for smi-only elements in dynamic array literals.
 function get(foo) { return foo; }  // Used to generate dynamic values.
@@ -190,6 +190,7 @@ assertEquals(foo, array[2]);
 (function literals_after_osr() {
   var color = [0];
   // Trigger OSR.
-  while (%GetOptimizationCount(literals_after_osr) == 0) {}
+  while ((%GetOptimizationStatus(literals_after_osr) &
+    V8OptimizationStatus.kTopmostFrameIsTurboFanned) !== 0) {}
   return [color[0]];
 })();

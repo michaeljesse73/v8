@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/compilation-dependencies.h"
 #include "src/compiler/js-graph.h"
 #include "src/compiler/js-typed-lowering.h"
 #include "src/compiler/machine-operator.h"
@@ -11,13 +10,9 @@
 #include "src/compiler/operator-properties.h"
 #include "src/compiler/simplified-operator.h"
 #include "src/compiler/typer.h"
-#include "src/factory.h"
+#include "src/factory-inl.h"
 #include "src/isolate.h"
-#include "src/objects-inl.h"
-// FIXME(mstarzinger, marja): This is weird, but required because of the missing
-// (disallowed) include: src/feedback-vector.h ->
-// src/feedback-vector-inl.h
-#include "src/feedback-vector-inl.h"
+#include "src/objects.h"
 #include "test/cctest/cctest.h"
 
 namespace v8 {
@@ -26,21 +21,17 @@ namespace compiler {
 
 class JSTypedLoweringTester : public HandleAndZoneScope {
  public:
-  JSTypedLoweringTester(
-      int num_parameters = 0,
-      JSTypedLowering::Flags flags = JSTypedLowering::kDeoptimizationEnabled)
+  explicit JSTypedLoweringTester(int num_parameters = 0)
       : isolate(main_isolate()),
-        binop(NULL),
-        unop(NULL),
+        binop(nullptr),
+        unop(nullptr),
         javascript(main_zone()),
         machine(main_zone()),
         simplified(main_zone()),
         common(main_zone()),
-        deps(main_isolate(), main_zone()),
         graph(main_zone()),
         typer(main_isolate(), Typer::kNoFlags, &graph),
-        context_node(NULL),
-        flags(flags) {
+        context_node(nullptr) {
     graph.SetStart(graph.NewNode(common.Start(num_parameters)));
     graph.SetEnd(graph.NewNode(common.End(1), graph.start()));
     typer.Run();
@@ -53,11 +44,9 @@ class JSTypedLoweringTester : public HandleAndZoneScope {
   MachineOperatorBuilder machine;
   SimplifiedOperatorBuilder simplified;
   CommonOperatorBuilder common;
-  CompilationDependencies deps;
   Graph graph;
   Typer typer;
   Node* context_node;
-  JSTypedLowering::Flags flags;
   BinaryOperationHint const binop_hints = BinaryOperationHint::kAny;
   CompareOperationHint const compare_hints = CompareOperationHint::kAny;
 
@@ -97,8 +86,7 @@ class JSTypedLoweringTester : public HandleAndZoneScope {
                     &machine);
     // TODO(titzer): mock the GraphReducer here for better unit testing.
     GraphReducer graph_reducer(main_zone(), &graph);
-    JSTypedLowering reducer(&graph_reducer, &deps, flags, &jsgraph,
-                            main_zone());
+    JSTypedLowering reducer(&graph_reducer, &jsgraph, main_zone());
     Reduction reduction = reducer.Reduce(node);
     if (reduction.Changed()) return reduction.replacement();
     return node;
@@ -107,7 +95,7 @@ class JSTypedLoweringTester : public HandleAndZoneScope {
   Node* start() { return graph.start(); }
 
   Node* context() {
-    if (context_node == NULL) {
+    if (context_node == nullptr) {
       context_node = graph.NewNode(common.Parameter(-1), graph.start());
     }
     return context_node;
@@ -532,7 +520,7 @@ TEST(JSToString1) {
 
   {  // ToString(number)
     Node* r = R.ReduceUnop(op, Type::Number());
-    CHECK_EQ(IrOpcode::kJSToString, r->opcode());
+    CHECK_EQ(IrOpcode::kNumberToString, r->opcode());
   }
 
   {  // ToString(string)
@@ -691,13 +679,13 @@ TEST(MixedComparison1) {
 TEST(RemoveToNumberEffects) {
   JSTypedLoweringTester R;
 
-  Node* effect_use = NULL;
+  Node* effect_use = nullptr;
   Node* zero = R.graph.NewNode(R.common.NumberConstant(0));
   for (int i = 0; i < 10; i++) {
     Node* p0 = R.Parameter(Type::Number());
     Node* ton = R.Unop(R.javascript.ToNumber(), p0);
     Node* frame_state = R.EmptyFrameState(R.context());
-    effect_use = NULL;
+    effect_use = nullptr;
 
     switch (i) {
       case 0:
@@ -732,13 +720,13 @@ TEST(RemoveToNumberEffects) {
     }
 
     R.CheckEffectInput(R.start(), ton);
-    if (effect_use != NULL) R.CheckEffectInput(ton, effect_use);
+    if (effect_use != nullptr) R.CheckEffectInput(ton, effect_use);
 
     Node* r = R.reduce(ton);
     CHECK_EQ(p0, r);
     CHECK_NE(R.start(), r);
 
-    if (effect_use != NULL) {
+    if (effect_use != nullptr) {
       R.CheckEffectInput(R.start(), effect_use);
       // Check that value uses of ToNumber() do not go to start().
       for (int i = 0; i < effect_use->op()->ValueInputCount(); i++) {
@@ -754,10 +742,8 @@ TEST(RemoveToNumberEffects) {
 // Helper class for testing the reduction of a single binop.
 class BinopEffectsTester {
  public:
-  BinopEffectsTester(
-      const Operator* op, Type* t0, Type* t1,
-      JSTypedLowering::Flags flags = JSTypedLowering::kDeoptimizationEnabled)
-      : R(0, flags),
+  BinopEffectsTester(const Operator* op, Type* t0, Type* t1)
+      : R(0),
         p0(R.Parameter(t0, 0)),
         p1(R.Parameter(t1, 1)),
         binop(R.Binop(op, p0, p1)),
@@ -915,133 +901,11 @@ TEST(RemovePureNumberBinopEffects) {
   }
 }
 
-
-TEST(OrderNumberBinopEffects1) {
-  JSTypedLoweringTester R;
-
-  const Operator* ops[] = {
-      R.javascript.Subtract(), R.simplified.NumberSubtract(),
-      R.javascript.Multiply(), R.simplified.NumberMultiply(),
-  };
-
-  for (size_t j = 0; j < arraysize(ops); j += 2) {
-    BinopEffectsTester B(ops[j], Type::Symbol(), Type::Symbol(),
-                         JSTypedLowering::kNoFlags);
-    CHECK_EQ(ops[j + 1]->opcode(), B.result->op()->opcode());
-
-    Node* i0 = B.CheckConvertedInput(IrOpcode::kJSToNumber, 0, true);
-    Node* i1 = B.CheckConvertedInput(IrOpcode::kJSToNumber, 1, true);
-
-    CHECK_EQ(B.p0, i0->InputAt(0));
-    CHECK_EQ(B.p1, i1->InputAt(0));
-
-    // Effects should be ordered start -> i0 -> i1 -> effect_use
-    B.CheckEffectOrdering(i0, i1);
-  }
-}
-
-
-TEST(OrderNumberBinopEffects2) {
-  JSTypedLoweringTester R;
-
-  const Operator* ops[] = {
-      R.javascript.Add(R.binop_hints), R.simplified.NumberAdd(),
-      R.javascript.Subtract(),         R.simplified.NumberSubtract(),
-      R.javascript.Multiply(),         R.simplified.NumberMultiply(),
-  };
-
-  for (size_t j = 0; j < arraysize(ops); j += 2) {
-    BinopEffectsTester B(ops[j], Type::Number(), Type::Symbol(),
-                         JSTypedLowering::kNoFlags);
-
-    Node* i0 = B.CheckNoOp(0);
-    Node* i1 = B.CheckConvertedInput(IrOpcode::kJSToNumber, 1, true);
-
-    CHECK_EQ(B.p0, i0);
-    CHECK_EQ(B.p1, i1->InputAt(0));
-
-    // Effects should be ordered start -> i1 -> effect_use
-    B.CheckEffectOrdering(i1);
-  }
-
-  for (size_t j = 0; j < arraysize(ops); j += 2) {
-    BinopEffectsTester B(ops[j], Type::Symbol(), Type::Number(),
-                         JSTypedLowering::kNoFlags);
-
-    Node* i0 = B.CheckConvertedInput(IrOpcode::kJSToNumber, 0, true);
-    Node* i1 = B.CheckNoOp(1);
-
-    CHECK_EQ(B.p0, i0->InputAt(0));
-    CHECK_EQ(B.p1, i1);
-
-    // Effects should be ordered start -> i0 -> effect_use
-    B.CheckEffectOrdering(i0);
-  }
-}
-
-
-TEST(OrderCompareEffects) {
-  JSTypedLoweringTester R;
-
-  const Operator* ops[] = {
-      R.javascript.GreaterThan(R.compare_hints), R.simplified.NumberLessThan(),
-      R.javascript.GreaterThanOrEqual(R.compare_hints),
-      R.simplified.NumberLessThanOrEqual(),
-  };
-
-  for (size_t j = 0; j < arraysize(ops); j += 2) {
-    BinopEffectsTester B(ops[j], Type::Symbol(), Type::String(),
-                         JSTypedLowering::kNoFlags);
-    CHECK_EQ(ops[j + 1]->opcode(), B.result->op()->opcode());
-
-    Node* i0 =
-        B.CheckConvertedInput(IrOpcode::kPlainPrimitiveToNumber, 0, false);
-    Node* i1 = B.CheckConvertedInput(IrOpcode::kJSToNumber, 1, true);
-
-    // Inputs should be commuted.
-    CHECK_EQ(B.p1, i0->InputAt(0));
-    CHECK_EQ(B.p0, i1->InputAt(0));
-
-    // But effects should be ordered start -> i1 -> effect_use
-    B.CheckEffectOrdering(i1);
-  }
-
-  for (size_t j = 0; j < arraysize(ops); j += 2) {
-    BinopEffectsTester B(ops[j], Type::Number(), Type::Symbol(),
-                         JSTypedLowering::kNoFlags);
-
-    Node* i0 = B.CheckConvertedInput(IrOpcode::kJSToNumber, 0, true);
-    Node* i1 = B.result->InputAt(1);
-
-    CHECK_EQ(B.p1, i0->InputAt(0));  // Should be commuted.
-    CHECK_EQ(B.p0, i1);
-
-    // Effects should be ordered start -> i1 -> effect_use
-    B.CheckEffectOrdering(i0);
-  }
-
-  for (size_t j = 0; j < arraysize(ops); j += 2) {
-    BinopEffectsTester B(ops[j], Type::Symbol(), Type::Number(),
-                         JSTypedLowering::kNoFlags);
-
-    Node* i0 = B.result->InputAt(0);
-    Node* i1 = B.CheckConvertedInput(IrOpcode::kJSToNumber, 1, true);
-
-    CHECK_EQ(B.p1, i0);  // Should be commuted.
-    CHECK_EQ(B.p0, i1->InputAt(0));
-
-    // Effects should be ordered start -> i0 -> effect_use
-    B.CheckEffectOrdering(i1);
-  }
-}
-
-
 TEST(Int32BinopEffects) {
   JSBitwiseTypedLoweringTester R;
   for (int j = 0; j < R.kNumberOps; j += 2) {
     bool signed_left = R.signedness[j], signed_right = R.signedness[j + 1];
-    BinopEffectsTester B(R.ops[j], I32Type(signed_left), I32Type(signed_right),
-                         JSTypedLowering::kNoFlags);
+    BinopEffectsTester B(R.ops[j], I32Type(signed_left), I32Type(signed_right));
     CHECK_EQ(R.ops[j + 1]->opcode(), B.result->op()->opcode());
 
     B.R.CheckBinop(B.result->opcode(), B.result);
@@ -1054,8 +918,7 @@ TEST(Int32BinopEffects) {
 
   for (int j = 0; j < R.kNumberOps; j += 2) {
     bool signed_left = R.signedness[j], signed_right = R.signedness[j + 1];
-    BinopEffectsTester B(R.ops[j], Type::Number(), Type::Number(),
-                         JSTypedLowering::kNoFlags);
+    BinopEffectsTester B(R.ops[j], Type::Number(), Type::Number());
     CHECK_EQ(R.ops[j + 1]->opcode(), B.result->op()->opcode());
 
     B.R.CheckBinop(B.result->opcode(), B.result);
@@ -1067,58 +930,38 @@ TEST(Int32BinopEffects) {
   }
 
   for (int j = 0; j < R.kNumberOps; j += 2) {
-    bool signed_left = R.signedness[j], signed_right = R.signedness[j + 1];
-    BinopEffectsTester B(R.ops[j], Type::Number(), Type::Primitive(),
-                         JSTypedLowering::kNoFlags);
+    bool signed_left = R.signedness[j];
+    BinopEffectsTester B(R.ops[j], Type::Number(), Type::Boolean());
 
     B.R.CheckBinop(B.result->opcode(), B.result);
 
-    Node* i0 = B.CheckConvertedInput(NumberToI32(signed_left), 0, false);
-    Node* i1 = B.CheckConvertedInput(NumberToI32(signed_right), 1, false);
+    B.CheckConvertedInput(NumberToI32(signed_left), 0, false);
+    B.CheckConvertedInput(IrOpcode::kPlainPrimitiveToNumber, 1, false);
 
-    CHECK_EQ(B.p0, i0->InputAt(0));
-    Node* ii1 = B.CheckConverted(IrOpcode::kJSToNumber, i1->InputAt(0), true);
-
-    CHECK_EQ(B.p1, ii1->InputAt(0));
-
-    B.CheckEffectOrdering(ii1);
+    B.CheckEffectsRemoved();
   }
 
   for (int j = 0; j < R.kNumberOps; j += 2) {
-    bool signed_left = R.signedness[j], signed_right = R.signedness[j + 1];
-    BinopEffectsTester B(R.ops[j], Type::Primitive(), Type::Number(),
-                         JSTypedLowering::kNoFlags);
+    bool signed_right = R.signedness[j + 1];
+    BinopEffectsTester B(R.ops[j], Type::Boolean(), Type::Number());
 
     B.R.CheckBinop(B.result->opcode(), B.result);
 
-    Node* i0 = B.CheckConvertedInput(NumberToI32(signed_left), 0, false);
-    Node* i1 = B.CheckConvertedInput(NumberToI32(signed_right), 1, false);
+    B.CheckConvertedInput(IrOpcode::kPlainPrimitiveToNumber, 0, false);
+    B.CheckConvertedInput(NumberToI32(signed_right), 1, false);
 
-    Node* ii0 = B.CheckConverted(IrOpcode::kJSToNumber, i0->InputAt(0), true);
-    CHECK_EQ(B.p1, i1->InputAt(0));
-
-    CHECK_EQ(B.p0, ii0->InputAt(0));
-
-    B.CheckEffectOrdering(ii0);
+    B.CheckEffectsRemoved();
   }
 
   for (int j = 0; j < R.kNumberOps; j += 2) {
-    bool signed_left = R.signedness[j], signed_right = R.signedness[j + 1];
-    BinopEffectsTester B(R.ops[j], Type::Primitive(), Type::Primitive(),
-                         JSTypedLowering::kNoFlags);
+    BinopEffectsTester B(R.ops[j], Type::Boolean(), Type::Boolean());
 
     B.R.CheckBinop(B.result->opcode(), B.result);
 
-    Node* i0 = B.CheckConvertedInput(NumberToI32(signed_left), 0, false);
-    Node* i1 = B.CheckConvertedInput(NumberToI32(signed_right), 1, false);
+    B.CheckConvertedInput(IrOpcode::kPlainPrimitiveToNumber, 0, false);
+    B.CheckConvertedInput(IrOpcode::kPlainPrimitiveToNumber, 1, false);
 
-    Node* ii0 = B.CheckConverted(IrOpcode::kJSToNumber, i0->InputAt(0), true);
-    Node* ii1 = B.CheckConverted(IrOpcode::kJSToNumber, i1->InputAt(0), true);
-
-    CHECK_EQ(B.p0, ii0->InputAt(0));
-    CHECK_EQ(B.p1, ii1->InputAt(0));
-
-    B.CheckEffectOrdering(ii0, ii1);
+    B.CheckEffectsRemoved();
   }
 }
 

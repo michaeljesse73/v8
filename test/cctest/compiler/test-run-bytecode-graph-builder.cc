@@ -4,6 +4,7 @@
 
 #include <utility>
 
+#include "src/api.h"
 #include "src/compilation-info.h"
 #include "src/compiler/pipeline.h"
 #include "src/debug/debug-interface.h"
@@ -75,10 +76,8 @@ class BytecodeGraphTester {
   BytecodeGraphTester(Isolate* isolate, const char* script,
                       const char* filter = kFunctionName)
       : isolate_(isolate), script_(script) {
-    i::FLAG_stress_fullcodegen = false;
     i::FLAG_always_opt = false;
     i::FLAG_allow_natives_syntax = true;
-    i::FLAG_loop_assignment_analysis = false;
   }
   virtual ~BytecodeGraphTester() {}
 
@@ -118,17 +117,19 @@ class BytecodeGraphTester {
         Handle<JSFunction>::cast(v8::Utils::OpenHandle(*api_function));
     CHECK(function->shared()->HasBytecodeArray());
 
-    // TODO(mstarzinger): We should be able to prime CompilationInfo without
-    // having to instantiate a ParseInfo first. Fix this!
-    ParseInfo parse_info(handle(function->shared()));
+    Zone zone(function->GetIsolate()->allocator(), ZONE_NAME);
+    Handle<SharedFunctionInfo> shared(function->shared());
+    CompilationInfo compilation_info(&zone, function->GetIsolate(), shared,
+                                     function);
 
-    CompilationInfo compilation_info(parse_info.zone(), &parse_info,
-                                     function->GetIsolate(), function);
-    compilation_info.SetOptimizing();
-    compilation_info.MarkAsDeoptimizationEnabled();
-    compilation_info.MarkAsOptimizeFromBytecode();
-    Handle<Code> code = Pipeline::GenerateCodeForTesting(&compilation_info);
-    function->ReplaceCode(*code);
+    // Compiler relies on canonicalized handles, let's create
+    // a canonicalized scope and migrate existing handles there.
+    CanonicalHandleScope canonical(isolate_);
+    compilation_info.ReopenHandlesInNewHandleScope();
+
+    Handle<Code> code = Pipeline::GenerateCodeForTesting(
+        &compilation_info, function->GetIsolate());
+    function->set_code(*code);
 
     return function;
   }
@@ -2970,7 +2971,8 @@ class CountBreakDebugDelegate : public v8::debug::DebugDelegate {
  public:
   void BreakProgramRequested(v8::Local<v8::Context> paused_context,
                              v8::Local<v8::Object> exec_state,
-                             v8::Local<v8::Value> break_points_hit) override {
+                             v8::Local<v8::Value> break_points_hit,
+                             const std::vector<int>&) override {
     debug_break_count++;
   }
   int debug_break_count = 0;
@@ -2998,6 +3000,19 @@ TEST(BytecodeGraphBuilderDebuggerStatement) {
   CHECK(return_value.is_identical_to(snippet.return_value()));
   CHECK_EQ(2, delegate.debug_break_count);
 }
+
+#undef SHARD_TEST_BY_2
+#undef SHARD_TEST_BY_4
+#undef SPACE
+#undef REPEAT_2
+#undef REPEAT_4
+#undef REPEAT_8
+#undef REPEAT_16
+#undef REPEAT_32
+#undef REPEAT_64
+#undef REPEAT_128
+#undef REPEAT_256
+#undef REPEAT_127
 
 }  // namespace compiler
 }  // namespace internal

@@ -5,11 +5,12 @@
 #ifndef V8_VISITORS_H_
 #define V8_VISITORS_H_
 
-#include "src/allocation.h"
+#include "src/globals.h"
 
 namespace v8 {
 namespace internal {
 
+class CodeDataContainer;
 class Object;
 
 #define ROOT_ID_LIST(V)                                                    \
@@ -61,11 +62,13 @@ class RootVisitor BASE_EMBEDDED {
 
   // Visits a contiguous arrays of pointers in the half-open range
   // [start, end). Any or all of the values may be modified on return.
-  virtual void VisitRootPointers(Root root, Object** start, Object** end) = 0;
+  virtual void VisitRootPointers(Root root, const char* description,
+                                 Object** start, Object** end) = 0;
 
   // Handy shorthand for visiting a single pointer.
-  virtual void VisitRootPointer(Root root, Object** p) {
-    VisitRootPointers(root, p, p + 1);
+  virtual void VisitRootPointer(Root root, const char* description,
+                                Object** p) {
+    VisitRootPointers(root, description, p, p + 1);
   }
 
   // Intended for serialization/deserialization checking: insert, or
@@ -73,6 +76,44 @@ class RootVisitor BASE_EMBEDDED {
   // Also used for marking up GC roots in heap snapshots.
   // TODO(ulan): Remove this.
   virtual void Synchronize(VisitorSynchronization::SyncTag tag) {}
+};
+
+// Abstract base class for visiting, and optionally modifying, the
+// pointers contained in Objects. Used in GC and serialization/deserialization.
+class ObjectVisitor BASE_EMBEDDED {
+ public:
+  virtual ~ObjectVisitor() {}
+
+  // Visits a contiguous arrays of pointers in the half-open range
+  // [start, end). Any or all of the values may be modified on return.
+  virtual void VisitPointers(HeapObject* host, Object** start,
+                             Object** end) = 0;
+
+  // Handy shorthand for visiting a single pointer.
+  virtual void VisitPointer(HeapObject* host, Object** p) {
+    VisitPointers(host, p, p + 1);
+  }
+
+  // To allow lazy clearing of inline caches the visitor has
+  // a rich interface for iterating over Code objects ...
+
+  // Visits a code target in the instruction stream.
+  virtual void VisitCodeTarget(Code* host, RelocInfo* rinfo);
+
+  // Visits a runtime entry in the instruction stream.
+  virtual void VisitRuntimeEntry(Code* host, RelocInfo* rinfo) {}
+
+  // Visit pointer embedded into a code object.
+  virtual void VisitEmbeddedPointer(Code* host, RelocInfo* rinfo);
+
+  // Visits an external reference embedded into a code object.
+  virtual void VisitExternalReference(Code* host, RelocInfo* rinfo) {}
+
+  // Visits an external reference.
+  virtual void VisitExternalReference(Foreign* host, Address* p) {}
+
+  // Visits an (encoded) internal reference.
+  virtual void VisitInternalReference(Code* host, RelocInfo* rinfo) {}
 };
 
 }  // namespace internal

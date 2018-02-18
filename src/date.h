@@ -43,7 +43,7 @@ class DateCache {
 
   virtual ~DateCache() {
     delete tz_cache_;
-    tz_cache_ = NULL;
+    tz_cache_ = nullptr;
   }
 
 
@@ -212,7 +212,7 @@ class DateCache {
 
   virtual int GetLocalOffsetFromOS() {
     double offset = tz_cache_->LocalTimeOffset();
-    DCHECK(offset < kInvalidLocalOffsetInMs);
+    DCHECK_LT(offset, kInvalidLocalOffsetInMs);
     return static_cast<int>(offset);
   }
 
@@ -289,4 +289,4 @@ class DateCache {
 }  // namespace internal
 }  // namespace v8
 
-#endif
+#endif  // V8_DATE_H_

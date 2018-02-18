@@ -15,16 +15,23 @@
       "resources": ["proxies.js"],
       "results_regexp": "^%s\\-Proxies\\(Score\\): (.+)$",
       "tests": [
-        {"name": "ProxyConstructorWithArrowFunc"},
-        {"name": "ProxyConstructorWithClass"},
-        {"name": "ProxyConstructorWithObject"},
-        {"name": "ProxyConstructorWithProxy"},
-        {"name": "CallProxyWithoutTrap"},
-        {"name": "CallProxyWithTrap"},
-        {"name": "ConstructProxyWithoutTrap"},
-        {"name": "ConstructProxyWithTrap"},
-        {"name": "GetPropertyOfProxyWithoutTrap"},
-        {"name": "GetPropertyOfProxyWithTrap"}
+        {"name": "GetStringWithoutTrap"},
+        {"name": "GetStringWithTrap"},
+        {"name": "GetIndexWithoutTrap"},
+        {"name": "GetIndexWithTrap"},
+        {"name": "GetSymbolWithoutTrap"},
+        {"name": "GetSymbolWithTrap"},
+        {"name": "HasStringWithoutTrap"},
+        {"name": "HasStringWithTrap"},
+        {"name": "HasSymbolWithoutTrap"},
+        {"name": "HasSymbolWithTrap"},
+        {"name": "SetStringWithoutTrap"},
+        {"name": "SetStringWithTrap"},
+        {"name": "SetIndexWithoutTrap"},
+        {"name": "SetIndexWithTrap"},
+        {"name": "SetSymbolWithoutTrap"},
+        {"name": "SetSymbolWithTrap"},
+        {"name": "HasInIdiom"}
       ]
     },
     {
@@ -51,6 +58,19 @@
       "resources": ["generators.js"],
       "flags": ["--harmony-function-sent"],
       "results_regexp": "^Generators\\-Generators\\(Score\\): (.+)$"
+    },
+    {
+      "name": "ArrayLiteralSpread",
+      "path": ["ArrayLiteralSpread"],
+      "main": "run.js",
+      "resources": [],
+      "results_regexp": "^%s\\-ArrayLiteralSpread\\(Score\\): (.+)$",
+      "tests": [
+        {"name": "Babel"},
+        {"name": "ForOfPush"},
+        {"name": "ForOfSet"},
+        {"name": "Spread"}
+      ]
     },
     {
       "name": "RestParameters",
@@ -82,11 +102,15 @@
       "name": "Classes",
       "path": ["Classes"],
       "main": "run.js",
-      "resources": ["super.js", "default-constructor.js"],
+      "resources": [
+        "super.js",
+        "default-constructor.js",
+        "leaf-constructors.js"],
       "results_regexp": "^%s\\-Classes\\(Score\\): (.+)$",
       "tests": [
         {"name": "Super"},
-        {"name": "DefaultConstructor"}
+        {"name": "DefaultConstructor"},
+        {"name": "LeafConstructors"}
       ]
     },
     {
@@ -112,6 +136,17 @@
       ]
     },
     {
+      "name": "ManyClosures",
+      "path": ["ManyClosures"],
+      "main": "run.js",
+      "resources": ["create-many-closures.js"],
+      "flags": [ "--allow-natives-syntax", "--expose-gc" ],
+      "results_regexp": "^%s\\-ManyClosures\\(Score\\): (.+)$",
+      "tests": [
+        {"name": "ManyClosures"}
+      ]
+    },
+    {
       "name": "Collections",
       "path": ["Collections"],
       "main": "run.js",
@@ -128,15 +163,20 @@
         {"name": "Map-Smi"},
         {"name": "Map-String"},
         {"name": "Map-Object"},
+        {"name": "Map-Object-Set-Get-Large"},
+        {"name": "Map-Double"},
         {"name": "Map-Iteration"},
         {"name": "Map-Iterator"},
         {"name": "Set-Smi"},
         {"name": "Set-String"},
         {"name": "Set-Object"},
+        {"name": "Set-Double"},
         {"name": "Set-Iteration"},
         {"name": "Set-Iterator"},
         {"name": "WeakMap"},
-        {"name": "WeakSet"}
+        {"name": "WeakMap-Constructor"},
+        {"name": "WeakSet"},
+        {"name": "WeakSet-Constructor"}
       ]
     },
     {
@@ -153,13 +193,24 @@
       "name": "Strings",
       "path": ["Strings"],
       "main": "run.js",
-      "resources": ["harmony-string.js"],
+      "resources": ["harmony-string.js", "string-indexof.js"],
       "results_regexp": "^%s\\-Strings\\(Score\\): (.+)$",
       "run_count": 1,
       "timeout": 240,
       "timeout_arm": 420,
       "tests": [
-        {"name": "StringFunctions"}
+        {"name": "StringFunctions"},
+        {"name": "StringIndexOfConstant"},
+        {"name": "StringIndexOfNonConstant"},
+        {"name": "StringCharCodeAtConstant"},
+        {"name": "StringCharCodeAtNonConstant"},
+        {"name": "StringCharCodeAtConstantInbounds"},
+        {"name": "StringCharCodeAtNonConstantInbounds"},
+        {"name": "StringCodePointAtConstant"},
+        {"name": "StringCodePointAtNonConstant"},
+        {"name": "StringCodePointAtConstantInbounds"},
+        {"name": "StringCodePointAtNonConstantInbounds"}
+
       ]
     },
     {
@@ -322,10 +373,40 @@
           "test_flags": ["construct-all-typedarrays"]
         },
         {
+          "name": "SetFromArrayLike",
+          "main": "run.js",
+          "resources": ["set-from-arraylike.js"],
+          "test_flags": ["set-from-arraylike"]
+        },
+        {
+          "name": "SetFromDifferentType",
+          "main": "run.js",
+          "resources": ["set-from-different-type.js"],
+          "test_flags": ["set-from-different-type"]
+        },
+        {
+          "name": "SetFromSameType",
+          "main": "run.js",
+          "resources": ["set-from-same-type.js"],
+          "test_flags": ["set-from-same-type"]
+        },
+        {
+          "name": "SliceNoSpecies",
+          "main": "run.js",
+          "resources": ["slice-nospecies.js"],
+          "test_flags": ["slice-nospecies"]
+        },
+        {
           "name": "Sort",
           "main": "run.js",
           "resources": ["sort.js"],
           "test_flags": ["sort"]
+        },
+        {
+          "name": "SubarrayNoSpecies",
+          "main": "run.js",
+          "resources": ["subarray-nospecies.js"],
+          "test_flags": ["subarray-nospecies"]
         }
       ]
     },
@@ -334,45 +415,94 @@
       "path": ["Array"],
       "main": "run.js",
       "resources": [
-        "filter.js", "map.js", "every.js", "some.js", "reduce.js", "reduce-right.js"
+        "filter.js", "map.js", "every.js", "join.js", "some.js",
+        "reduce.js", "reduce-right.js", "to-string.js", "find.js",
+        "find-index.js", "from.js", "of.js", "for-each.js"
       ],
       "flags": [
         "--allow-natives-syntax"
       ],
       "results_regexp": "^%s\\-Array\\(Score\\): (.+)$",
       "tests": [
+        {"name": "NaiveForEachReplacement"},
+        {"name": "DoubleForEach"},
+        {"name": "SmiForEach"},
+        {"name": "FastForEach"},
+        {"name": "GenericForEach"},
+        {"name": "OptFastForEach"},
+        {"name": "OptUnreliableForEach"},
         {"name": "NaiveFilterReplacement"},
         {"name": "DoubleFilter"},
         {"name": "SmiFilter"},
         {"name": "FastFilter"},
-        {"name": "ObjectFilter"},
+        {"name": "GenericFilter"},
         {"name": "OptFastFilter"},
+        {"name": "OptUnreliableFilter"},
         {"name": "NaiveMapReplacement"},
         {"name": "DoubleMap"},
         {"name": "SmiMap"},
         {"name": "FastMap"},
-        {"name": "ObjectMap"},
-	{"name": "OptFastMap"},
+        {"name": "GenericMap"},
+        {"name": "OptFastMap"},
+        {"name": "OptUnreliableMap"},
         {"name": "DoubleEvery"},
         {"name": "SmiEvery"},
         {"name": "FastEvery"},
-        {"name": "ObjectEvery"},
-	{"name": "OptFastEvery"},
+        {"name": "OptFastEvery"},
+        {"name": "OptUnreliableEvery"},
+        {"name": "SmiJoin"},
+        {"name": "StringJoin"},
+        {"name": "SparseSmiJoin"},
+        {"name": "SparseStringJoin"},
         {"name": "DoubleSome"},
         {"name": "SmiSome"},
         {"name": "FastSome"},
-        {"name": "ObjectSome"},
-	{"name": "OptFastSome"},
+        {"name": "OptFastSome"},
+        {"name": "OptUnreliableSome"},
         {"name": "DoubleReduce"},
         {"name": "SmiReduce"},
         {"name": "FastReduce"},
-        {"name": "ObjectReduce"},
-	{"name": "OptFastReduce"},
+        {"name": "OptFastReduce"},
+        {"name": "OptUnreliableReduce"},
         {"name": "DoubleReduceRight"},
         {"name": "SmiReduceRight"},
         {"name": "FastReduceRight"},
-        {"name": "ObjectReduceRight"},
-	{"name": "OptFastReduceRight"}
+        {"name": "OptFastReduceRight"},
+        {"name": "OptUnreliableReduceRight"},
+        {"name": "SmiToString"},
+        {"name": "StringToString"},
+        {"name": "SparseSmiToString"},
+        {"name": "SparseStringToString"},
+        {"name": "NaiveFindReplacement"},
+        {"name": "DoubleFind"},
+        {"name": "SmiFind"},
+        {"name": "FastFind"},
+        {"name": "GenericFind"},
+        {"name": "OptFastFind"},
+        {"name": "OptUnreliableFind"},
+        {"name": "NaiveFindIndexReplacement"},
+        {"name": "DoubleFindIndex"},
+        {"name": "SmiFindIndex"},
+        {"name": "FastFindIndex"},
+        {"name": "GenericFindIndex"},
+        {"name": "OptFastFindIndex"},
+        {"name": "OptUnreliableFindIndex"},
+        {"name": "EmptyArrayOf"},
+        {"name": "SmallSmiArrayOf"},
+        {"name": "LargeSmiArrayOf"},
+        {"name": "SmallTransplantedArrayOf"},
+        {"name": "SmallDoubleArrayOf"},
+        {"name": "SmallStringArrayOf"},
+        {"name": "SmallMixedArrayOf"},
+        {"name": "SmiFrom"},
+        {"name": "SmallSmiFrom"},
+        {"name": "SmiNoMapFrom"},
+        {"name": "SmiNoIteratorFrom"},
+        {"name": "TransplantedFrom"},
+        {"name": "DoubleFrom"},
+        {"name": "StringFrom"},
+        {"name": "StringNoMapFrom"},
+        {"name": "MixedFrom"}
       ]
     },
     {
@@ -464,6 +594,7 @@
           "resources": [ "arithmetic.js" ],
           "test_flags": [ "arithmetic" ],
           "results_regexp": "^%s\\-BytecodeHandler\\(Score\\): (.+)$",
+          "timeout": 240,
           "tests": [
             {"name": "Smi-Add"},
             {"name": "Number-Add"},
@@ -557,11 +688,26 @@
       "path": ["Inspector"],
       "main": "run.js",
       "resources": [ "debugger.js", "runtime.js" ],
-      "flags": ["--enable-inspector"],
+      "flags": ["--enable-inspector","--allow-natives-syntax"],
       "results_regexp": "^%s\\-Inspector\\(Score\\): (.+)$",
       "tests": [
         {"name": "Debugger.paused"},
-        {"name": "Runtime.evaluate(String16Cstor)"}
+        {"name": "Runtime.evaluate(String16Cstor)"},
+        {"name": "Debugger.getPossibleBreakpoints"},
+        {"name": "AsyncStacksInstrumentation"}
+      ]
+    },
+    {
+      "name": "Parsing",
+      "path": ["Parsing"],
+      "main": "run.js",
+      "flags": ["--no-compilation-cache", "--allow-natives-syntax"],
+      "resources": [ "comments.js"],
+      "results_regexp": "^%s\\-Parsing\\(Score\\): (.+)$",
+      "tests": [
+        {"name": "OneLineComment"},
+        {"name": "OneLineComments"},
+        {"name": "MultiLineComment"}
       ]
     }
   ]

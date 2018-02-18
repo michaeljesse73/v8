@@ -49,7 +49,9 @@ class MapUpdater {
         old_map_(old_map),
         old_descriptors_(old_map->instance_descriptors(), isolate_),
         old_nof_(old_map_->NumberOfOwnDescriptors()),
-        new_elements_kind_(old_map_->elements_kind()) {
+        new_elements_kind_(old_map_->elements_kind()),
+        is_transitionable_fast_elements_kind_(
+            IsTransitionableFastElementsKind(new_elements_kind_)) {
     // We shouldn't try to update remote objects.
     DCHECK(!old_map->FindRootMap()->GetConstructor()->IsFunctionTemplateInfo());
   }
@@ -161,8 +163,9 @@ class MapUpdater {
 
   State state_ = kInitialized;
   ElementsKind new_elements_kind_;
+  bool is_transitionable_fast_elements_kind_;
 
-  // If |modified_descriptor_| is not equal to -1 them the fields below form
+  // If |modified_descriptor_| is not equal to -1 then the fields below form
   // an "update" of the |old_map_|'s descriptors.
   int modified_descriptor_ = -1;
   PropertyKind new_kind_ = kData;

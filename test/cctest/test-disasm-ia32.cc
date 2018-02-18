@@ -33,16 +33,35 @@
 #include "src/debug/debug.h"
 #include "src/disasm.h"
 #include "src/disassembler.h"
-#include "src/ia32/frames-ia32.h"
+#include "src/frames-inl.h"
 #include "src/macro-assembler.h"
 #include "test/cctest/cctest.h"
 
-using namespace v8::internal;
-
+namespace v8 {
+namespace internal {
 
 #define __ assm.
 
+void Disassemble(FILE* f, byte* begin, byte* end) {
+  disasm::NameConverter converter;
+  disasm::Disassembler d(converter);
+  for (byte* pc = begin; pc < end;) {
+    v8::internal::EmbeddedVector<char, 128> buffer;
+    buffer[0] = '\0';
+    byte* prev_pc = pc;
+    pc += d.InstructionDecodeForTesting(buffer, pc);
+    fprintf(f, "%p", static_cast<void*>(prev_pc));
+    fprintf(f, "    ");
 
+    for (byte* bp = prev_pc; bp < pc; bp++) {
+      fprintf(f, "%02x", *bp);
+    }
+    for (int i = 6 - (pc - prev_pc); i >= 0; i--) {
+      fprintf(f, "  ");
+    }
+    fprintf(f, "  %s\n", buffer.start());
+  }
+}
 static void DummyStaticFunction(Object* result) {
 }
 
@@ -53,7 +72,7 @@ TEST(DisasmIa320) {
   HandleScope scope(isolate);
   v8::internal::byte buffer[8192];
   Assembler assm(isolate, buffer, sizeof buffer);
-  DummyStaticFunction(NULL);  // just bloody use it (DELETE; debugging)
+  DummyStaticFunction(nullptr);  // just bloody use it (DELETE; debugging)
   // Short immediate instructions
   __ adc(eax, 12345678);
   __ add(eax, Immediate(12345678));
@@ -69,7 +88,7 @@ TEST(DisasmIa320) {
 
   // ---- All instructions that I can think of
   __ add(edx, ebx);
-  __ add(edx, Operand(12, RelocInfo::NONE32));
+  __ add(edx, Operand(12, RelocInfo::NONE));
   __ add(edx, Operand(ebx, 0));
   __ add(edx, Operand(ebx, 16));
   __ add(edx, Operand(ebx, 1999));
@@ -289,7 +308,7 @@ TEST(DisasmIa320) {
   __ bind(&L2);
   __ call(Operand(ebx, ecx, times_4, 10000));
   __ nop();
-  Handle<Code> ic = isolate->builtins()->LoadIC();
+  Handle<Code> ic = BUILTIN_CODE(isolate, LoadIC);
   __ call(ic, RelocInfo::CODE_TARGET);
   __ nop();
   __ call(FUNCTION_ADDR(DummyStaticFunction), RelocInfo::RUNTIME_ENTRY);
@@ -481,6 +500,8 @@ TEST(DisasmIa320) {
     __ maxsd(xmm1, Operand(ebx, ecx, times_4, 10000));
     __ ucomisd(xmm0, xmm1);
     __ cmpltsd(xmm0, xmm1);
+    __ haddps(xmm1, xmm0);
+    __ haddps(xmm1, Operand(ebx, ecx, times_4, 10000));
 
     __ andpd(xmm0, xmm1);
 
@@ -530,11 +551,14 @@ TEST(DisasmIa320) {
     __ cmov(greater, eax, Operand(edx, 3));
   }
 
+#define EMIT_SSE34_INSTR(instruction, notUsed1, notUsed2, notUsed3, notUsed4) \
+  __ instruction(xmm5, xmm1);                                                 \
+  __ instruction(xmm5, Operand(edx, 4));
+
   {
     if (CpuFeatures::IsSupported(SSSE3)) {
       CpuFeatureScope scope(&assm, SSSE3);
-      __ pshufb(xmm5, xmm1);
-      __ pshufb(xmm5, Operand(edx, 4));
+      SSSE3_INSTRUCTION_LIST(EMIT_SSE34_INSTR)
     }
   }
 
@@ -547,20 +571,18 @@ TEST(DisasmIa320) {
       __ pextrw(Operand(edx, 4), xmm0, 1);
       __ pextrd(eax, xmm0, 1);
       __ pextrd(Operand(edx, 4), xmm0, 1);
+      __ insertps(xmm1, xmm2, 0);
+      __ insertps(xmm1, Operand(edx, 4), 0);
       __ pinsrb(xmm1, eax, 0);
       __ pinsrb(xmm1, Operand(edx, 4), 0);
       __ pinsrd(xmm1, eax, 0);
       __ pinsrd(xmm1, Operand(edx, 4), 0);
       __ extractps(eax, xmm1, 0);
 
-#define EMIT_SSE4_INSTR(instruction, notUsed1, notUsed2, notUsed3, notUsed4) \
-  __ instruction(xmm5, xmm1);                                                \
-  __ instruction(xmm5, Operand(edx, 4));
-
-      SSE4_INSTRUCTION_LIST(EMIT_SSE4_INSTR)
-#undef EMIT_SSE4_INSTR
+      SSE4_INSTRUCTION_LIST(EMIT_SSE34_INSTR)
     }
   }
+#undef EMIT_SSE34_INSTR
 
   // AVX instruction
   {
@@ -612,6 +634,9 @@ TEST(DisasmIa320) {
       __ vrcpps(xmm1, Operand(ebx, ecx, times_4, 10000));
       __ vrsqrtps(xmm1, xmm0);
       __ vrsqrtps(xmm1, Operand(ebx, ecx, times_4, 10000));
+      __ vmovaps(xmm0, xmm1);
+      __ vshufps(xmm0, xmm1, xmm2, 3);
+      __ vshufps(xmm0, xmm1, Operand(edx, 4), 3);
 
       __ vcmpeqps(xmm5, xmm4, xmm1);
       __ vcmpeqps(xmm5, xmm4, Operand(ebx, ecx, times_4, 10000));
@@ -646,8 +671,6 @@ TEST(DisasmIa320) {
       __ vpsraw(xmm0, xmm7, 21);
       __ vpsrad(xmm0, xmm7, 21);
 
-      __ vpshufb(xmm5, xmm0, xmm1);
-      __ vpshufb(xmm5, xmm0, Operand(edx, 4));
       __ vpshuflw(xmm5, xmm1, 5);
       __ vpshuflw(xmm5, Operand(edx, 4), 5);
       __ vpshufd(xmm5, xmm1, 5);
@@ -658,6 +681,8 @@ TEST(DisasmIa320) {
       __ vpextrw(Operand(edx, 4), xmm0, 1);
       __ vpextrd(eax, xmm0, 1);
       __ vpextrd(Operand(edx, 4), xmm0, 1);
+      __ vinsertps(xmm0, xmm1, xmm2, 0);
+      __ vinsertps(xmm0, xmm1, Operand(edx, 4), 0);
       __ vpinsrb(xmm0, xmm1, eax, 0);
       __ vpinsrb(xmm0, xmm1, Operand(edx, 4), 0);
       __ vpinsrw(xmm0, xmm1, eax, 0);
@@ -670,6 +695,8 @@ TEST(DisasmIa320) {
       __ vcvttps2dq(xmm1, xmm0);
       __ vcvttps2dq(xmm1, Operand(ebx, ecx, times_4, 10000));
 
+      __ vmovdqu(xmm0, Operand(ebx, ecx, times_4, 10000));
+      __ vmovdqu(Operand(ebx, ecx, times_4, 10000), xmm0);
       __ vmovd(xmm0, edi);
       __ vmovd(xmm0, Operand(ebx, ecx, times_4, 10000));
       __ vmovd(eax, xmm1);
@@ -681,13 +708,14 @@ TEST(DisasmIa320) {
       SSE2_INSTRUCTION_LIST(EMIT_SSE2_AVXINSTR)
 #undef EMIT_SSE2_AVXINSTR
 
-#define EMIT_SSE4_AVXINSTR(instruction, notUsed1, notUsed2, notUsed3, \
-                           notUsed4)                                  \
-  __ v##instruction(xmm7, xmm5, xmm1);                                \
+#define EMIT_SSE34_AVXINSTR(instruction, notUsed1, notUsed2, notUsed3, \
+                            notUsed4)                                  \
+  __ v##instruction(xmm7, xmm5, xmm1);                                 \
   __ v##instruction(xmm7, xmm5, Operand(edx, 4));
 
-      SSE4_INSTRUCTION_LIST(EMIT_SSE4_AVXINSTR)
-#undef EMIT_SSE4_AVXINSTR
+      SSSE3_INSTRUCTION_LIST(EMIT_SSE34_AVXINSTR)
+      SSE4_INSTRUCTION_LIST(EMIT_SSE34_AVXINSTR)
+#undef EMIT_SSE34_AVXINSTR
     }
   }
 
@@ -848,16 +876,19 @@ TEST(DisasmIa320) {
 
   CodeDesc desc;
   assm.GetCode(isolate, &desc);
-  Handle<Code> code = isolate->factory()->NewCode(
-      desc, Code::ComputeFlags(Code::STUB), Handle<Code>());
+  Handle<Code> code =
+      isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
   USE(code);
 #ifdef OBJECT_PRINT
   OFStream os(stdout);
   code->Print(os);
   byte* begin = code->instruction_start();
   byte* end = begin + code->instruction_size();
-  disasm::Disassembler::Disassemble(stdout, begin, end);
+  Disassemble(stdout, begin, end);
 #endif
 }
 
 #undef __
+
+}  // namespace internal
+}  // namespace v8

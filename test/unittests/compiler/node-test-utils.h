@@ -272,6 +272,7 @@ Matcher<Node*> IsNumberTan(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsNumberTanh(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsNumberTrunc(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsStringFromCharCode(const Matcher<Node*>& value_matcher);
+Matcher<Node*> IsStringLength(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsAllocate(const Matcher<Node*>& size_matcher,
                           const Matcher<Node*>& effect_matcher,
                           const Matcher<Node*>& control_matcher);
@@ -335,6 +336,7 @@ Matcher<Node*> IsUnalignedStore(
     const Matcher<Node*>& value_matcher, const Matcher<Node*>& effect_matcher,
     const Matcher<Node*>& control_matcher);
 Matcher<Node*> IsStackSlot(const Matcher<StackSlotRepresentation>& rep_matcher);
+Matcher<Node*> IsWord32Popcnt(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsWord32And(const Matcher<Node*>& lhs_matcher,
                            const Matcher<Node*>& rhs_matcher);
 Matcher<Node*> IsWord32Or(const Matcher<Node*>& lhs_matcher,
@@ -358,7 +360,11 @@ Matcher<Node*> IsWord64And(const Matcher<Node*>& lhs_matcher,
                            const Matcher<Node*>& rhs_matcher);
 Matcher<Node*> IsWord64Or(const Matcher<Node*>& lhs_matcher,
                           const Matcher<Node*>& rhs_matcher);
+Matcher<Node*> IsWord64Xor(const Matcher<Node*>& lhs_matcher,
+                           const Matcher<Node*>& rhs_matcher);
 Matcher<Node*> IsWord64Shl(const Matcher<Node*>& lhs_matcher,
+                           const Matcher<Node*>& rhs_matcher);
+Matcher<Node*> IsWord64Shr(const Matcher<Node*>& lhs_matcher,
                            const Matcher<Node*>& rhs_matcher);
 Matcher<Node*> IsWord64Sar(const Matcher<Node*>& lhs_matcher,
                            const Matcher<Node*>& rhs_matcher);
@@ -442,6 +448,7 @@ Matcher<Node*> IsNumberToBoolean(const Matcher<Node*>& input_matcher);
 Matcher<Node*> IsNumberToInt32(const Matcher<Node*>& input_matcher);
 Matcher<Node*> IsNumberToUint32(const Matcher<Node*>& input_matcher);
 Matcher<Node*> IsParameter(const Matcher<int> index_matcher);
+Matcher<Node*> IsSpeculationPoison();
 Matcher<Node*> IsLoadFramePointer();
 Matcher<Node*> IsLoadParentFramePointer();
 Matcher<Node*> IsPlainPrimitiveToNumber(const Matcher<Node*>& input_matcher);
@@ -472,6 +479,81 @@ Matcher<Node*> IsWord32PairSar(const Matcher<Node*>& lhs_matcher,
 Matcher<Node*> IsWord32ReverseBytes(const Matcher<Node*>& value_matcher);
 
 Matcher<Node*> IsStackSlot();
+
+// Helpers
+static inline Matcher<Node*> IsIntPtrConstant(const intptr_t value) {
+  return kPointerSize == 8 ? IsInt64Constant(static_cast<int64_t>(value))
+                           : IsInt32Constant(static_cast<int32_t>(value));
+}
+
+static inline Matcher<Node*> IsIntPtrAdd(const Matcher<Node*>& lhs_matcher,
+                                         const Matcher<Node*>& rhs_matcher) {
+  return kPointerSize == 8 ? IsInt64Add(lhs_matcher, rhs_matcher)
+                           : IsInt32Add(lhs_matcher, rhs_matcher);
+}
+
+static inline Matcher<Node*> IsIntPtrSub(const Matcher<Node*>& lhs_matcher,
+                                         const Matcher<Node*>& rhs_matcher) {
+  return kPointerSize == 8 ? IsInt64Sub(lhs_matcher, rhs_matcher)
+                           : IsInt32Sub(lhs_matcher, rhs_matcher);
+}
+
+static inline Matcher<Node*> IsIntPtrMul(const Matcher<Node*>& lhs_matcher,
+                                         const Matcher<Node*>& rhs_matcher) {
+  return kPointerSize == 8 ? IsInt64Mul(lhs_matcher, rhs_matcher)
+                           : IsInt32Mul(lhs_matcher, rhs_matcher);
+}
+
+static inline Matcher<Node*> IsWordShl(const Matcher<Node*>& lhs_matcher,
+                                       const Matcher<Node*>& rhs_matcher) {
+  return kPointerSize == 8 ? IsWord64Shl(lhs_matcher, rhs_matcher)
+                           : IsWord32Shl(lhs_matcher, rhs_matcher);
+}
+
+static inline Matcher<Node*> IsWordShr(const Matcher<Node*>& lhs_matcher,
+                                       const Matcher<Node*>& rhs_matcher) {
+  return kPointerSize == 8 ? IsWord64Shr(lhs_matcher, rhs_matcher)
+                           : IsWord32Shr(lhs_matcher, rhs_matcher);
+}
+
+static inline Matcher<Node*> IsWordSar(const Matcher<Node*>& lhs_matcher,
+                                       const Matcher<Node*>& rhs_matcher) {
+  return kPointerSize == 8 ? IsWord64Sar(lhs_matcher, rhs_matcher)
+                           : IsWord32Sar(lhs_matcher, rhs_matcher);
+}
+
+static inline Matcher<Node*> IsWordAnd(const Matcher<Node*>& lhs_matcher,
+                                       const Matcher<Node*>& rhs_matcher) {
+  return kPointerSize == 8 ? IsWord64And(lhs_matcher, rhs_matcher)
+                           : IsWord32And(lhs_matcher, rhs_matcher);
+}
+
+static inline Matcher<Node*> IsWordOr(const Matcher<Node*>& lhs_matcher,
+                                      const Matcher<Node*>& rhs_matcher) {
+  return kPointerSize == 8 ? IsWord64Or(lhs_matcher, rhs_matcher)
+                           : IsWord32Or(lhs_matcher, rhs_matcher);
+}
+
+static inline Matcher<Node*> IsWordXor(const Matcher<Node*>& lhs_matcher,
+                                       const Matcher<Node*>& rhs_matcher) {
+  return kPointerSize == 8 ? IsWord64Xor(lhs_matcher, rhs_matcher)
+                           : IsWord32Xor(lhs_matcher, rhs_matcher);
+}
+
+static inline Matcher<Node*> IsChangeInt32ToIntPtr(
+    const Matcher<Node*>& matcher) {
+  return kPointerSize == 8 ? IsChangeInt32ToInt64(matcher) : matcher;
+}
+
+static inline Matcher<Node*> IsChangeUint32ToWord(
+    const Matcher<Node*>& matcher) {
+  return kPointerSize == 8 ? IsChangeUint32ToUint64(matcher) : matcher;
+}
+
+static inline Matcher<Node*> IsTruncateWordToWord32(
+    const Matcher<Node*>& matcher) {
+  return kPointerSize == 8 ? IsTruncateInt64ToInt32(matcher) : matcher;
+}
 
 }  // namespace compiler
 }  // namespace internal

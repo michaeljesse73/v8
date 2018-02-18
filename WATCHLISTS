@@ -33,6 +33,10 @@
 
 {
   'WATCHLIST_DEFINITIONS': {
+    'api': {
+      'filepath': 'include/' \
+                  '|src/api\.(cc|h)$',
+    },
     'snapshot': {
       'filepath': 'src/snapshot/',
     },
@@ -60,9 +64,6 @@
     'merges': {
       'filepath': '.',
     },
-    'gypfiles': {
-      'filepath': 'gypfiles/',
-    },
     'inspector': {
       'filepath': 'inspector',
     },
@@ -83,6 +84,9 @@
   },
 
   'WATCHLISTS': {
+    'api': [
+      'adamk@chromium.org',
+    ],
     'snapshot': [
       'yangguo@chromium.org',
     ],
@@ -109,9 +113,6 @@
       # Only enabled on branches created with tools/release/create_release.py
       # 'v8-merges@googlegroups.com',
     ],
-    'gypfiles': [
-      'machenbach@chromium.org',
-    ],
     'inspector': [
       'devtools-reviews@chromium.org',
     ],
@@ -122,6 +123,7 @@
       'jbroman+watch@chromium.org',
     ],
     'parser': [
+      'adamk@chromium.org',
       'marja+watch@chromium.org',
     ],
     'tracing': [

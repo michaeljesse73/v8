@@ -9,7 +9,6 @@
 
 #include "src/v8.h"
 
-#include "src/base/utils/random-number-generator.h"
 #include "src/compilation-cache.h"
 #include "src/compilation-dependencies.h"
 #include "src/compilation-info.h"
@@ -23,8 +22,9 @@
 #include "src/property.h"
 #include "src/transitions.h"
 
-using namespace v8::internal;
-
+namespace v8 {
+namespace internal {
+namespace test_field_type_tracking {
 
 // TODO(ishell): fix this once TransitionToPrototype stops generalizing
 // all field representations (similar to crbug/448711 where elements kind
@@ -66,11 +66,11 @@ static Handle<AccessorPair> CreateAccessorPair(bool with_getter,
   Handle<AccessorPair> pair = factory->NewAccessorPair();
   Handle<String> empty_string = factory->empty_string();
   if (with_getter) {
-    Handle<JSFunction> func = factory->NewFunction(empty_string);
+    Handle<JSFunction> func = factory->NewFunctionForTest(empty_string);
     pair->set_getter(*func);
   }
   if (with_setter) {
-    Handle<JSFunction> func = factory->NewFunction(empty_string);
+    Handle<JSFunction> func = factory->NewFunctionForTest(empty_string);
     pair->set_setter(*func);
   }
   return pair;
@@ -110,6 +110,20 @@ class Expectations {
     CHECK(index < MAX_PROPERTIES);
     kinds_[index] = kind;
     locations_[index] = location;
+    if (kind == kData && location == kField &&
+        IsTransitionableFastElementsKind(elements_kind_) &&
+        Map::IsInplaceGeneralizableField(constness, representation,
+                                         FieldType::cast(*value))) {
+      // Maps with transitionable elements kinds must have non in-place
+      // generalizable fields.
+      if (FLAG_track_constant_fields && FLAG_modify_map_inplace &&
+          constness == kConst) {
+        constness = kMutable;
+      }
+      if (representation.IsHeapObject() && !FieldType::cast(*value)->IsAny()) {
+        value = FieldType::Any(isolate_);
+      }
+    }
     constnesses_[index] = constness;
     attributes_[index] = attributes;
     representations_[index] = representation;
@@ -318,14 +332,14 @@ class Expectations {
   Handle<Map> AddDataField(Handle<Map> map, PropertyAttributes attributes,
                            PropertyConstness constness,
                            Representation representation,
-                           Handle<FieldType> heap_type) {
+                           Handle<FieldType> field_type) {
     CHECK_EQ(number_of_properties_, map->NumberOfOwnDescriptors());
     int property_index = number_of_properties_++;
     SetDataField(property_index, attributes, constness, representation,
-                 heap_type);
+                 field_type);
 
     Handle<String> name = MakeName("prop", property_index);
-    return Map::CopyWithField(map, name, heap_type, attributes, constness,
+    return Map::CopyWithField(map, name, field_type, attributes, constness,
                               representation, INSERT_TRANSITION)
         .ToHandleChecked();
   }
@@ -354,9 +368,10 @@ class Expectations {
                  heap_type);
 
     Handle<String> name = MakeName("prop", property_index);
+    bool created_new_map;
     return Map::TransitionToDataProperty(
         map, name, value, attributes, constness,
-        Object::CERTAINLY_NOT_STORE_FROM_KEYED);
+        Object::CERTAINLY_NOT_STORE_FROM_KEYED, &created_new_map);
   }
 
   Handle<Map> TransitionToDataConstant(Handle<Map> map,
@@ -367,9 +382,10 @@ class Expectations {
     SetDataConstant(property_index, attributes, value);
 
     Handle<String> name = MakeName("prop", property_index);
-    return Map::TransitionToDataProperty(
-        map, name, value, attributes, kConst,
-        Object::CERTAINLY_NOT_STORE_FROM_KEYED);
+    bool created_new_map;
+    return Map::TransitionToDataProperty(map, name, value, attributes, kConst,
+                                         Object::CERTAINLY_NOT_STORE_FROM_KEYED,
+                                         &created_new_map);
   }
 
   Handle<Map> FollowDataTransition(Handle<Map> map,
@@ -384,8 +400,8 @@ class Expectations {
 
     Handle<String> name = MakeName("prop", property_index);
     Map* target =
-        TransitionArray::SearchTransition(*map, kData, *name, attributes);
-    CHECK(target != NULL);
+        TransitionsAccessor(map).SearchTransition(*name, kData, attributes);
+    CHECK_NOT_NULL(target);
     return handle(target);
   }
 
@@ -593,7 +609,7 @@ static void TestGeneralizeField(int detach_property_at_index,
 
   CHECK(detach_property_at_index >= -1 &&
         detach_property_at_index < kPropCount);
-  CHECK(property_index < kPropCount);
+  CHECK_LT(property_index, kPropCount);
   CHECK_NE(detach_property_at_index, property_index);
 
   const bool is_detached_map = detach_property_at_index >= 0;
@@ -1389,7 +1405,7 @@ static void TestReconfigureProperty_CustomPropertyAfterTargetMap(
   Expectations expectations(isolate);
 
   const int kSplitProp = 2;
-  CHECK(kSplitProp < kCustomPropIndex);
+  CHECK_LT(kSplitProp, kCustomPropIndex);
 
   const PropertyConstness constness = kMutable;
   const Representation representation = Representation::Smi();
@@ -1468,7 +1484,7 @@ TEST(ReconfigureDataFieldAttribute_SameDataConstantAfterTargetMap) {
     TestConfig() {
       Isolate* isolate = CcTest::i_isolate();
       Factory* factory = isolate->factory();
-      js_func_ = factory->NewFunction(factory->empty_string());
+      js_func_ = factory->NewFunctionForTest(factory->empty_string());
     }
 
     Handle<Map> AddPropertyAtBranch(int branch_id, Expectations& expectations,
@@ -1554,7 +1570,7 @@ TEST(ReconfigureDataFieldAttribute_DataConstantToAccConstantAfterTargetMap) {
     TestConfig() {
       Isolate* isolate = CcTest::i_isolate();
       Factory* factory = isolate->factory();
-      js_func_ = factory->NewFunction(factory->empty_string());
+      js_func_ = factory->NewFunctionForTest(factory->empty_string());
       pair_ = CreateAccessorPair(true, true);
     }
 
@@ -1701,6 +1717,7 @@ static void TestReconfigureElementsKind_GeneralizeField(
 
   // Create a map, add required properties to it and initialize expectations.
   Handle<Map> initial_map = Map::Create(isolate, 0);
+  initial_map->set_instance_type(JS_ARRAY_TYPE);
   initial_map->set_elements_kind(PACKED_SMI_ELEMENTS);
 
   Handle<Map> map = initial_map;
@@ -1787,14 +1804,14 @@ static void TestReconfigureElementsKind_GeneralizeField(
 // where "p2A" and "p2B" differ only in the representation/field type.
 //
 static void TestReconfigureElementsKind_GeneralizeFieldTrivial(
-    const CRFTData& from, const CRFTData& to, const CRFTData& expected,
-    bool expected_field_type_dependency = true) {
+    const CRFTData& from, const CRFTData& to, const CRFTData& expected) {
   Isolate* isolate = CcTest::i_isolate();
 
   Expectations expectations(isolate, PACKED_SMI_ELEMENTS);
 
   // Create a map, add required properties to it and initialize expectations.
   Handle<Map> initial_map = Map::Create(isolate, 0);
+  initial_map->set_instance_type(JS_ARRAY_TYPE);
   initial_map->set_elements_kind(PACKED_SMI_ELEMENTS);
 
   Handle<Map> map = initial_map;
@@ -1850,7 +1867,7 @@ static void TestReconfigureElementsKind_GeneralizeFieldTrivial(
                             expected.representation, expected.type);
   CHECK(!map->is_deprecated());
   CHECK_EQ(*map, *new_map);
-  CHECK_EQ(expected_field_type_dependency, dependencies.HasAborted());
+  CHECK(!dependencies.HasAborted());
   dependencies.Rollback();  // Properly cleanup compilation info.
 
   CHECK(!new_map->is_deprecated());
@@ -1866,107 +1883,6 @@ static void TestReconfigureElementsKind_GeneralizeFieldTrivial(
     map_list.push_back(updated_map);
     Map* transitioned_map = map2->FindElementsKindTransitionedMap(map_list);
     CHECK_EQ(*updated_map, transitioned_map);
-  }
-}
-
-// This test ensures that trivial field generalization (from HeapObject to
-// HeapObject) is correctly propagated from one branch of transition tree
-// (|map2|) to another (|map|) also through transition shortcuts.
-//
-//   + - p0 - p1 - p2A - p3 - p4: |map|
-//   ^    ^    ^    ^     ^    ^
-//   |    |    |    |     |    |
-//  ek   {     ek shortcuts     }
-//   |    |    |    |     |    |
-//  {} - p0 - p1 - p2B - p3 - p4: |map2|
-//
-// where "p2A" and "p2B" differ only in the representation/field type.
-//
-static void TestGeneralizeFieldTrivial_ThroughTransitionShortcuts(
-    const CRFTData& from, const CRFTData& to, const CRFTData& shortcut,
-    const CRFTData& expected, bool expected_field_type_dependency = true) {
-  Isolate* isolate = CcTest::i_isolate();
-
-  Expectations expectations(isolate, PACKED_SMI_ELEMENTS);
-
-  // Create a map, add required properties to it and initialize expectations.
-  Handle<Map> initial_map = Map::Create(isolate, 0);
-  initial_map->set_elements_kind(PACKED_SMI_ELEMENTS);
-
-  Handle<Map> map = initial_map;
-  map = expectations.AsElementsKind(map, PACKED_ELEMENTS);
-  for (int i = 0; i < kPropCount; i++) {
-    // Add a branch in transition tree to prevent descriptors sharing.
-    Handle<String> name = MakeName("tmp", i);
-    Map::CopyWithField(map, name, shortcut.type, NONE, shortcut.constness,
-                       shortcut.representation, INSERT_TRANSITION)
-        .ToHandleChecked();
-
-    map = expectations.AddDataField(map, NONE, shortcut.constness,
-                                    shortcut.representation, shortcut.type);
-  }
-  CHECK(!map->is_deprecated());
-  CHECK(map->is_stable());
-  CHECK(expectations.Check(*map));
-
-  // Create another branch in transition tree (property at index |kDiffProp|
-  // has different attributes), initialize expectations.
-  Expectations expectations2(isolate, PACKED_SMI_ELEMENTS);
-
-  Handle<Map> map2 = initial_map;
-  for (int i = 0; i < kPropCount; i++) {
-    map2 = expectations2.AddDataField(map2, NONE, from.constness,
-                                      from.representation, from.type);
-  }
-  CHECK(!map2->is_deprecated());
-  CHECK(map2->is_stable());
-  CHECK(expectations2.Check(*map2));
-
-  // Register elements kind transition shortcut.
-  Map::RegisterElementsKindTransitionShortcut(map2, map);
-  CHECK(!map2->is_stable());
-
-  Zone zone(isolate->allocator(), ZONE_NAME);
-  {
-    const int kDiffProp = kPropCount / 2;
-    Handle<Map> field_owner(map->FindFieldOwner(kDiffProp), isolate);
-    CompilationDependencies dependencies(isolate, &zone);
-    CHECK(!dependencies.HasAborted());
-    dependencies.AssumeFieldOwner(field_owner);
-
-    // Reconfigure property of |map2|, which should generalize representations
-    // in |map| through the elements kind shortcut.
-    Handle<Map> new_map = Map::ReconfigureProperty(
-        map2, kDiffProp, kData, NONE, to.representation, to.type, to.constness);
-
-    expectations2.SetDataField(kDiffProp, expected.constness,
-                               expected.representation, expected.type);
-
-    // |map2| should be left unchanged but marked unstable.
-    CHECK(!map2->is_deprecated());
-    CHECK_EQ(*map2, *new_map);
-    CHECK(expectations2.Check(*map2));
-
-    // In trivial case |map2| should be returned as a result of property
-    // reconfiguration, respective field types should be generalized and
-    // respective code dependencies should be invalidated. |map| should be NOT
-    // deprecated and it should match new expectations.
-    expectations.SetDataField(kDiffProp, expected.constness,
-                              expected.representation, expected.type);
-    CHECK(!map->is_deprecated());
-    CHECK_NE(*map, *new_map);
-    CHECK_EQ(expected_field_type_dependency, dependencies.HasAborted());
-    dependencies.Rollback();  // Properly cleanup compilation info.
-
-    CHECK(!new_map->is_deprecated());
-    CHECK(expectations.Check(*map));
-
-    // Field type updates must be properly propagated till fields' owner maps.
-    Handle<Map> tmp_map = map;
-    for (int nof = map->NumberOfOwnDescriptors(); nof >= 0; nof--) {
-      CHECK(expectations.Check(*tmp_map, nof));
-      tmp_map = handle(Map::cast(tmp_map->GetBackPointer()), isolate);
-    }
   }
 }
 
@@ -2078,7 +1994,6 @@ TEST(ReconfigureElementsKind_GeneralizeHeapObjFieldToHeapObj) {
         {kConst, Representation::HeapObject(), current_type},
         {kConst, Representation::HeapObject(), new_type},
         {kConst, Representation::HeapObject(), expected_type});
-
     if (FLAG_modify_map_inplace) {
       // kConst to kMutable migration does not create a new map, therefore
       // trivial generalization.
@@ -2112,7 +2027,7 @@ TEST(ReconfigureElementsKind_GeneralizeHeapObjFieldToHeapObj) {
     TestReconfigureElementsKind_GeneralizeFieldTrivial(
         {kConst, Representation::HeapObject(), any_type},
         {kConst, Representation::HeapObject(), new_type},
-        {kConst, Representation::HeapObject(), any_type}, false);
+        {kConst, Representation::HeapObject(), any_type});
 
     if (FLAG_modify_map_inplace) {
       // kConst to kMutable migration does not create a new map, therefore
@@ -2133,12 +2048,12 @@ TEST(ReconfigureElementsKind_GeneralizeHeapObjFieldToHeapObj) {
     TestReconfigureElementsKind_GeneralizeFieldTrivial(
         {kMutable, Representation::HeapObject(), any_type},
         {kConst, Representation::HeapObject(), new_type},
-        {kMutable, Representation::HeapObject(), any_type}, false);
+        {kMutable, Representation::HeapObject(), any_type});
   }
   TestReconfigureElementsKind_GeneralizeFieldTrivial(
       {kMutable, Representation::HeapObject(), any_type},
       {kMutable, Representation::HeapObject(), new_type},
-      {kMutable, Representation::HeapObject(), any_type}, false);
+      {kMutable, Representation::HeapObject(), any_type});
 }
 
 TEST(ReconfigureElementsKind_GeneralizeHeapObjectFieldToTagged) {
@@ -2169,206 +2084,6 @@ TEST(ReconfigureElementsKind_GeneralizeHeapObjectFieldToTagged) {
       {kMutable, Representation::HeapObject(), value_type},
       {kMutable, Representation::Smi(), any_type},
       {kMutable, Representation::Tagged(), any_type});
-}
-
-TEST(GeneralizeHeapObjectFieldToHeapObject_ThroughTransitionShortcuts) {
-  CcTest::InitializeVM();
-  v8::HandleScope scope(CcTest::isolate());
-  Isolate* isolate = CcTest::i_isolate();
-  Handle<FieldType> any_type = FieldType::Any(isolate);
-
-  Handle<FieldType> current_type =
-      FieldType::Class(Map::Create(isolate, 0), isolate);
-
-  Handle<FieldType> new_type =
-      FieldType::Class(Map::Create(isolate, 0), isolate);
-
-  Handle<FieldType> expected_type = any_type;
-
-  if (FLAG_track_constant_fields) {
-    TestGeneralizeFieldTrivial_ThroughTransitionShortcuts(
-        {kConst, Representation::HeapObject(), current_type},
-        {kConst, Representation::HeapObject(), new_type},
-        {kConst, Representation::HeapObject(), current_type},
-        {kConst, Representation::HeapObject(), expected_type});
-
-    if (FLAG_modify_map_inplace) {
-      // kConst to kMutable migration does not create a new map, therefore
-      // trivial generalization.
-      TestGeneralizeFieldTrivial_ThroughTransitionShortcuts(
-          {kConst, Representation::HeapObject(), current_type},
-          {kMutable, Representation::HeapObject(), new_type},
-          {kConst, Representation::HeapObject(), current_type},
-          {kMutable, Representation::HeapObject(), expected_type});
-    }
-    TestGeneralizeFieldTrivial_ThroughTransitionShortcuts(
-        {kMutable, Representation::HeapObject(), current_type},
-        {kConst, Representation::HeapObject(), new_type},
-        {kMutable, Representation::HeapObject(), current_type},
-        {kMutable, Representation::HeapObject(), expected_type});
-  }
-  TestGeneralizeFieldTrivial_ThroughTransitionShortcuts(
-      {kMutable, Representation::HeapObject(), current_type},
-      {kMutable, Representation::HeapObject(), new_type},
-      {kMutable, Representation::HeapObject(), current_type},
-      {kMutable, Representation::HeapObject(), expected_type});
-
-  // Check that generalizations do not trigger deopts through elements kind
-  // transition shortcuts when it's not necessary (for example, when the
-  // shortcut map already has field types that don't have to be updated).
-
-  if (FLAG_track_constant_fields) {
-    TestGeneralizeFieldTrivial_ThroughTransitionShortcuts(
-        {kConst, Representation::HeapObject(), current_type},
-        {kConst, Representation::HeapObject(), new_type},
-        {kConst, Representation::HeapObject(), any_type},
-        {kConst, Representation::HeapObject(), expected_type}, false);
-
-    if (FLAG_modify_map_inplace) {
-      // kConst to kMutable migration does not create a new map, therefore
-      // trivial generalization.
-      TestGeneralizeFieldTrivial_ThroughTransitionShortcuts(
-          {kConst, Representation::HeapObject(), current_type},
-          {kMutable, Representation::HeapObject(), new_type},
-          {kMutable, Representation::HeapObject(), any_type},
-          {kMutable, Representation::HeapObject(), expected_type}, false);
-    }
-    TestGeneralizeFieldTrivial_ThroughTransitionShortcuts(
-        {kMutable, Representation::HeapObject(), current_type},
-        {kConst, Representation::HeapObject(), new_type},
-        {kMutable, Representation::HeapObject(), any_type},
-        {kMutable, Representation::HeapObject(), expected_type}, false);
-  }
-  TestGeneralizeFieldTrivial_ThroughTransitionShortcuts(
-      {kMutable, Representation::HeapObject(), current_type},
-      {kMutable, Representation::HeapObject(), new_type},
-      {kMutable, Representation::HeapObject(), any_type},
-      {kMutable, Representation::HeapObject(), expected_type}, false);
-}
-
-namespace {
-
-void CheckElementsKindTransitionShortcutsChain(
-    Map* map, const std::vector<ElementsKind>& expected_elements_kinds) {
-  Handle<Symbol> shortcut =
-      map->GetIsolate()->factory()->elements_transition_shortcut_symbol();
-  Map* current_map = map;
-  CHECK_EQ(expected_elements_kinds[0], map->elements_kind());
-  for (size_t i = 1; i < expected_elements_kinds.size(); i++) {
-    Map* transition = TransitionArray::SearchSpecial(current_map, *shortcut);
-    CHECK_NOT_NULL(transition);
-    CHECK_EQ(expected_elements_kinds[i], transition->elements_kind());
-    current_map = transition;
-  }
-  Map* transition = TransitionArray::SearchSpecial(current_map, *shortcut);
-  CHECK_NULL(transition);
-}
-
-}  // namespace
-
-TEST(MapInsertElementsKindTransitionShortcut) {
-  CcTest::InitializeVM();
-  v8::HandleScope scope(CcTest::isolate());
-  Isolate* isolate = CcTest::i_isolate();
-  Handle<FieldType> any_type = FieldType::Any(isolate);
-
-  // Create a map with initial elements kind and add a property.
-  Handle<Map> initial_map = Map::Create(isolate, 0);
-  initial_map->set_elements_kind(PACKED_SMI_ELEMENTS);
-
-  Handle<String> field_name = MakeString("tmp");
-  Handle<Map> map =
-      Map::CopyWithField(initial_map, field_name, any_type, NONE, kMutable,
-                         Representation::Smi(), INSERT_TRANSITION)
-          .ToHandleChecked();
-
-  STATIC_ASSERT(PACKED_SMI_ELEMENTS == 0);
-  STATIC_ASSERT(HOLEY_SMI_ELEMENTS == 1);
-  STATIC_ASSERT(PACKED_ELEMENTS == 2);
-  STATIC_ASSERT(HOLEY_ELEMENTS == 3);
-  STATIC_ASSERT(PACKED_DOUBLE_ELEMENTS == 4);
-  STATIC_ASSERT(HOLEY_DOUBLE_ELEMENTS == 5);
-  const int kTransitionsCount = 6;
-  MapHandles maps;
-  for (int i = 0; i < kTransitionsCount; i++) {
-    ElementsKind elements_kind = static_cast<ElementsKind>(i);
-    Handle<Map> transition = Map::ReconfigureElementsKind(map, elements_kind);
-    maps.push_back(transition);
-  }
-
-  // Now create two chains of shortcuts.
-  // 1) PACKED_SMI_ELEMENTS -> HOLEY_DOUBLE_ELEMENTS -> PACKED_ELEMENTS
-  {
-    Map::InsertElementsKindTransitionShortcutForTesting(
-        isolate, maps[PACKED_SMI_ELEMENTS], maps[PACKED_ELEMENTS]);
-    Map::InsertElementsKindTransitionShortcutForTesting(
-        isolate, maps[PACKED_SMI_ELEMENTS], maps[HOLEY_DOUBLE_ELEMENTS]);
-
-    Map::InsertElementsKindTransitionShortcutForTesting(
-        isolate, maps[HOLEY_DOUBLE_ELEMENTS], maps[PACKED_ELEMENTS]);
-  }
-
-  // 2) HOLEY_SMI_ELEMENTS -> PACKED_DOUBLE_ELEMENTS -> HOLEY_ELEMENTS
-  {
-    Map::InsertElementsKindTransitionShortcutForTesting(
-        isolate, maps[HOLEY_SMI_ELEMENTS], maps[HOLEY_ELEMENTS]);
-    Map::InsertElementsKindTransitionShortcutForTesting(
-        isolate, maps[HOLEY_SMI_ELEMENTS], maps[PACKED_DOUBLE_ELEMENTS]);
-
-    Map::InsertElementsKindTransitionShortcutForTesting(
-        isolate, maps[PACKED_DOUBLE_ELEMENTS], maps[HOLEY_ELEMENTS]);
-  }
-
-  // Then create shortcut PACKED_SMI_ELEMENTS -> HOLEY_SMI_ELEMENTS.
-  Map::InsertElementsKindTransitionShortcutForTesting(
-      isolate, maps[PACKED_SMI_ELEMENTS], maps[HOLEY_SMI_ELEMENTS]);
-
-  DCHECK(TransitionArray::IsSortedNoDuplicates(*initial_map));
-  DCHECK(TransitionArray::IsConsistentWithBackPointers(*initial_map));
-
-  // As a result we should get full chain of transition shortcuts.
-  CheckElementsKindTransitionShortcutsChain(
-      *map, {PACKED_SMI_ELEMENTS, HOLEY_SMI_ELEMENTS, PACKED_DOUBLE_ELEMENTS,
-             HOLEY_DOUBLE_ELEMENTS, PACKED_ELEMENTS, HOLEY_ELEMENTS});
-
-  //
-  // Now check that deprecated maps are handled properly.
-  //
-
-  // Mark PACKED_DOUBLE_ELEMENTS and HOLEY_DOUBLE_ELEMENTS maps as deprecated.
-  Map::ReconfigureProperty(maps[PACKED_DOUBLE_ELEMENTS], 0, kData, NONE,
-                           Representation::Tagged(), any_type, kMutable);
-  CHECK(maps[PACKED_DOUBLE_ELEMENTS]->is_deprecated());
-
-  Map::ReconfigureProperty(maps[HOLEY_DOUBLE_ELEMENTS], 0, kData, NONE,
-                           Representation::Tagged(), any_type, kMutable);
-  CHECK(maps[HOLEY_DOUBLE_ELEMENTS]->is_deprecated());
-
-  // And insert PACKED_SMI_ELEMENTS -> HOLEY_ELEMENTS shortcut again.
-  Map::InsertElementsKindTransitionShortcutForTesting(
-      isolate, maps[PACKED_SMI_ELEMENTS], maps[HOLEY_ELEMENTS]);
-
-  // Deprecated maps should be removed from the chain.
-  CheckElementsKindTransitionShortcutsChain(
-      *map, {PACKED_SMI_ELEMENTS, HOLEY_SMI_ELEMENTS, PACKED_ELEMENTS,
-             HOLEY_ELEMENTS});
-
-  // Now update deprecated maps and insert shortcuts back into the chain.
-  {
-    Handle<Map> updated_map = Map::Update(maps[PACKED_DOUBLE_ELEMENTS]);
-    Map::InsertElementsKindTransitionShortcutForTesting(
-        isolate, maps[PACKED_SMI_ELEMENTS], updated_map);
-  }
-  {
-    Handle<Map> updated_map = Map::Update(maps[HOLEY_DOUBLE_ELEMENTS]);
-    Map::InsertElementsKindTransitionShortcutForTesting(
-        isolate, maps[HOLEY_SMI_ELEMENTS], updated_map);
-  }
-
-  // As a result we should get full chain of transition shortcuts again.
-  CheckElementsKindTransitionShortcutsChain(
-      *map, {PACKED_SMI_ELEMENTS, HOLEY_SMI_ELEMENTS, PACKED_DOUBLE_ELEMENTS,
-             HOLEY_DOUBLE_ELEMENTS, PACKED_ELEMENTS, HOLEY_ELEMENTS});
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2405,8 +2120,8 @@ TEST(ReconfigurePropertySplitMapTransitionsOverflow) {
 
       Handle<String> name = MakeName("prop", i);
       Map* target =
-          TransitionArray::SearchTransition(*map2, kData, *name, NONE);
-      CHECK(target != NULL);
+          TransitionsAccessor(map2).SearchTransition(*name, kData, NONE);
+      CHECK_NOT_NULL(target);
       map2 = handle(target);
     }
 
@@ -2427,14 +2142,14 @@ TEST(ReconfigurePropertySplitMapTransitionsOverflow) {
   CHECK(!map2->is_deprecated());
 
   // Fill in transition tree of |map2| so that it can't have more transitions.
-  for (int i = 0; i < TransitionArray::kMaxNumberOfTransitions; i++) {
-    CHECK(TransitionArray::CanHaveMoreTransitions(map2));
+  for (int i = 0; i < TransitionsAccessor::kMaxNumberOfTransitions; i++) {
+    CHECK(TransitionsAccessor(map2).CanHaveMoreTransitions());
     Handle<String> name = MakeName("foo", i);
     Map::CopyWithField(map2, name, any_type, NONE, kMutable,
                        Representation::Smi(), INSERT_TRANSITION)
         .ToHandleChecked();
   }
-  CHECK(!TransitionArray::CanHaveMoreTransitions(map2));
+  CHECK(!TransitionsAccessor(map2).CanHaveMoreTransitions());
 
   // Try to update |map|, since there is no place for propX transition at |map2|
   // |map| should become "copy-generalized".
@@ -2928,7 +2643,8 @@ TEST(TransitionDataConstantToSameDataConstant) {
   Isolate* isolate = CcTest::i_isolate();
   Factory* factory = isolate->factory();
 
-  Handle<JSFunction> js_func = factory->NewFunction(factory->empty_string());
+  Handle<JSFunction> js_func =
+      factory->NewFunctionForTest(factory->empty_string());
   TransitionToDataConstantOperator transition_op(js_func);
 
   SameMapChecker checker;
@@ -2975,7 +2691,8 @@ TEST(TransitionDataConstantToDataField) {
   Factory* factory = isolate->factory();
   Handle<FieldType> any_type = FieldType::Any(isolate);
 
-  Handle<JSFunction> js_func1 = factory->NewFunction(factory->empty_string());
+  Handle<JSFunction> js_func1 =
+      factory->NewFunctionForTest(factory->empty_string());
   TransitionToDataConstantOperator transition_op1(js_func1);
 
   Handle<Object> value2 = isolate->factory()->NewHeapNumber(0);
@@ -3011,7 +2728,7 @@ TEST(HoleyMutableHeapNumber) {
   CHECK_EQ(kHoleNanInt64, mhn->value_as_bits());
 
   mhn = isolate->factory()->NewHeapNumber(0.0, MUTABLE);
-  CHECK_EQ(V8_UINT64_C(0), mhn->value_as_bits());
+  CHECK_EQ(uint64_t{0}, mhn->value_as_bits());
 
   mhn->set_value_as_bits(kHoleNanInt64);
   CHECK_EQ(kHoleNanInt64, mhn->value_as_bits());
@@ -3029,3 +2746,7 @@ TEST(HoleyMutableHeapNumber) {
   CHECK(obj->IsMutableHeapNumber());
   CHECK_EQ(kHoleNanInt64, HeapNumber::cast(*obj)->value_as_bits());
 }
+
+}  // namespace test_field_type_tracking
+}  // namespace internal
+}  // namespace v8

@@ -37,6 +37,7 @@
 #include "src/deoptimizer.h"
 #include "src/frames.h"
 #include "src/objects-inl.h"
+#include "src/snapshot/snapshot.h"
 #include "src/utils.h"
 #include "test/cctest/cctest.h"
 
@@ -377,7 +378,7 @@ Handle<FixedArray> GetDebuggedFunctions() {
 
 
 // Check that the debugger has been fully unloaded.
-void CheckDebuggerUnloaded(bool check_functions) {
+void CheckDebuggerUnloaded() {
   // Check that the debugger context is cleared and that there is no debug
   // information stored for the debugger.
   CHECK(CcTest::i_isolate()->debug()->debug_context().is_null());
@@ -389,21 +390,9 @@ void CheckDebuggerUnloaded(bool check_functions) {
 
   // Iterate the heap and check that there are no debugger related objects left.
   HeapIterator iterator(CcTest::heap());
-  for (HeapObject* obj = iterator.next(); obj != NULL; obj = iterator.next()) {
+  for (HeapObject* obj = iterator.next(); obj != nullptr;
+       obj = iterator.next()) {
     CHECK(!obj->IsDebugInfo());
-
-    // If deep check of functions is requested check that no debug break code
-    // is left in all functions.
-    if (check_functions) {
-      if (obj->IsJSFunction()) {
-        JSFunction* fun = JSFunction::cast(obj);
-        for (RelocIterator it(fun->shared()->code(),
-                              RelocInfo::kDebugBreakSlotMask);
-             !it.done(); it.next()) {
-          CHECK(!it.rinfo()->IsPatchedDebugBreakSlotSequence());
-        }
-      }
-    }
   }
 }
 
@@ -413,11 +402,7 @@ void CheckDebuggerUnloaded(bool check_functions) {
 
 
 // Check that the debugger has been fully unloaded.
-static void CheckDebuggerUnloaded(v8::Isolate* isolate,
-                                  bool check_functions = false) {
-  v8::internal::CheckDebuggerUnloaded(check_functions);
-}
-
+static void CheckDebuggerUnloaded() { v8::internal::CheckDebuggerUnloaded(); }
 
 // --- D e b u g   E v e n t   H a n d l e r s
 // ---
@@ -632,7 +617,7 @@ static void DebugEventCounter(
     v8::Local<v8::Function> fun = v8::Local<v8::Function>::Cast(
         event_data->Get(context, fun_name).ToLocalChecked());
     v8::Local<v8::Value> result =
-        fun->Call(context, event_data, 0, NULL).ToLocalChecked();
+        fun->Call(context, event_data, 0, nullptr).ToLocalChecked();
     if (result->IsTrue()) {
       uncaught_exception_hit_count++;
     }
@@ -652,7 +637,7 @@ static void DebugEventCounter(
   // Run callback from DebugEventListener and check the result.
   if (!debug_event_listener_callback.IsEmpty()) {
     v8::Local<v8::Value> result =
-        debug_event_listener_callback->Call(context, event_data, 0, NULL)
+        debug_event_listener_callback->Call(context, event_data, 0, nullptr)
             .ToLocalChecked();
     CHECK(!result.IsEmpty());
     CHECK_EQ(debug_event_listener_callback_result,
@@ -676,7 +661,7 @@ struct EvaluateCheck {
 
 
 // Array of checks to do.
-struct EvaluateCheck* checks = NULL;
+struct EvaluateCheck* checks = nullptr;
 // Source for The JavaScript function which can do the evaluation when a break
 // point is hit.
 const char* evaluate_check_source =
@@ -698,7 +683,7 @@ static void DebugEventEvaluate(
 
   if (event == v8::Break) {
     break_point_hit_count++;
-    for (int i = 0; checks[i].expr != NULL; i++) {
+    for (int i = 0; checks[i].expr != nullptr; i++) {
       const int argc = 3;
       v8::Local<v8::String> string = v8_str(isolate, checks[i].expr);
       v8::Local<v8::Value> argv[argc] = {exec_state, string,
@@ -707,7 +692,7 @@ static void DebugEventEvaluate(
           evaluate_check_function->Call(context, exec_state, argc, argv)
               .ToLocalChecked();
       if (!result->IsTrue()) {
-        v8::String::Utf8Value utf8(checks[i].expected);
+        v8::String::Utf8Value utf8(isolate, checks[i].expected);
         V8_Fatal(__FILE__, __LINE__, "%s != %s", checks[i].expr, *utf8);
       }
     }
@@ -759,7 +744,7 @@ static void DebugEventStep(
 
 // String containing the expected function call sequence. Note: this only works
 // if functions have name length of one.
-const char* expected_step_sequence = NULL;
+const char* expected_step_sequence = nullptr;
 
 // The actual debug event described by the longer comment above.
 static void DebugEventStepSequence(
@@ -783,7 +768,7 @@ static void DebugEventStepSequence(
             .ToLocalChecked();
     CHECK(result->IsString());
     v8::String::Utf8Value function_name(
-        result->ToString(context).ToLocalChecked());
+        CcTest::isolate(), result->ToString(context).ToLocalChecked());
     CHECK_EQ(1, StrLength(*function_name));
     CHECK_EQ((*function_name)[0],
               expected_step_sequence[break_point_hit_count]);
@@ -945,23 +930,23 @@ TEST(BreakPointICStore) {
       CompileFunction(&env, "function foo(){bar=0;}", "foo");
 
   // Run without breakpoints.
-  foo->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   // Run with breakpoint
   int bp = SetBreakPoint(foo, 0);
-  foo->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
-  foo->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   // Run without breakpoints.
   ClearBreakPoint(bp);
-  foo->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -977,23 +962,23 @@ TEST(BreakPointICLoad) {
       CompileFunction(&env, "function foo(){var x=bar;}", "foo");
 
   // Run without breakpoints.
-  foo->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   // Run with breakpoint.
   int bp = SetBreakPoint(foo, 0);
-  foo->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
-  foo->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   // Run without breakpoints.
   ClearBreakPoint(bp);
-  foo->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -1008,23 +993,23 @@ TEST(BreakPointICCall) {
       CompileFunction(&env, "function foo(){bar();}", "foo");
 
   // Run without breakpoints.
-  foo->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   // Run with breakpoint
   int bp = SetBreakPoint(foo, 0);
-  foo->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
-  foo->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   // Run without breakpoints.
   ClearBreakPoint(bp);
-  foo->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -1040,7 +1025,7 @@ TEST(BreakPointICCallWithGC) {
   v8::Local<v8::Context> context = env.context();
 
   // Run without breakpoints.
-  CHECK_EQ(1, foo->Call(context, env->Global(), 0, NULL)
+  CHECK_EQ(1, foo->Call(context, env->Global(), 0, nullptr)
                   .ToLocalChecked()
                   ->Int32Value(context)
                   .FromJust());
@@ -1048,12 +1033,12 @@ TEST(BreakPointICCallWithGC) {
 
   // Run with breakpoint.
   int bp = SetBreakPoint(foo, 0);
-  CHECK_EQ(1, foo->Call(context, env->Global(), 0, NULL)
+  CHECK_EQ(1, foo->Call(context, env->Global(), 0, nullptr)
                   .ToLocalChecked()
                   ->Int32Value(context)
                   .FromJust());
   CHECK_EQ(1, break_point_hit_count);
-  CHECK_EQ(1, foo->Call(context, env->Global(), 0, NULL)
+  CHECK_EQ(1, foo->Call(context, env->Global(), 0, nullptr)
                   .ToLocalChecked()
                   ->Int32Value(context)
                   .FromJust());
@@ -1061,11 +1046,11 @@ TEST(BreakPointICCallWithGC) {
 
   // Run without breakpoints.
   ClearBreakPoint(bp);
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -1081,7 +1066,7 @@ TEST(BreakPointConstructCallWithGC) {
   v8::Local<v8::Context> context = env.context();
 
   // Run without breakpoints.
-  CHECK_EQ(1, foo->Call(context, env->Global(), 0, NULL)
+  CHECK_EQ(1, foo->Call(context, env->Global(), 0, nullptr)
                   .ToLocalChecked()
                   ->Int32Value(context)
                   .FromJust());
@@ -1089,12 +1074,12 @@ TEST(BreakPointConstructCallWithGC) {
 
   // Run with breakpoint.
   int bp = SetBreakPoint(foo, 0);
-  CHECK_EQ(1, foo->Call(context, env->Global(), 0, NULL)
+  CHECK_EQ(1, foo->Call(context, env->Global(), 0, nullptr)
                   .ToLocalChecked()
                   ->Int32Value(context)
                   .FromJust());
   CHECK_EQ(1, break_point_hit_count);
-  CHECK_EQ(1, foo->Call(context, env->Global(), 0, NULL)
+  CHECK_EQ(1, foo->Call(context, env->Global(), 0, nullptr)
                   .ToLocalChecked()
                   ->Int32Value(context)
                   .FromJust());
@@ -1102,11 +1087,11 @@ TEST(BreakPointConstructCallWithGC) {
 
   // Run without breakpoints.
   ClearBreakPoint(bp);
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -1131,29 +1116,121 @@ TEST(BreakPointReturn) {
   v8::Local<v8::Context> context = env.context();
 
   // Run without breakpoints.
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   // Run with breakpoint
   int bp = SetBreakPoint(foo, 0);
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
   CHECK_EQ(0, last_source_line);
   CHECK_EQ(15, last_source_column);
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
   CHECK_EQ(0, last_source_line);
   CHECK_EQ(15, last_source_column);
 
   // Run without breakpoints.
   ClearBreakPoint(bp);
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
+// Test that a break point can be set at a return store location.
+TEST(BreakPointBuiltin) {
+  i::FLAG_allow_natives_syntax = true;
+  break_point_hit_count = 0;
+  DebugLocalContext env;
+  v8::HandleScope scope(env->GetIsolate());
+
+  SetDebugEventListener(env->GetIsolate(), DebugEventBreakPointHitCount);
+  v8::Local<v8::Function> builtin =
+      CompileRun("String.prototype.repeat").As<v8::Function>();
+
+  // === Test simple builtin ===
+  CompileRun("'a'.repeat(10)");
+  CHECK_EQ(0, break_point_hit_count);
+
+  // Run with breakpoint.
+  int bp = SetBreakPoint(builtin, 0);
+  CompileRun("'b'.repeat(10)");
+  CHECK_EQ(1, break_point_hit_count);
+
+  // Run without breakpoints.
+  ClearBreakPoint(bp);
+  CompileRun("'b'.repeat(10)");
+  CHECK_EQ(1, break_point_hit_count);
+
+  // === Test inlined builtin ===
+  break_point_hit_count = 0;
+  builtin = CompileRun("Math.sin").As<v8::Function>();
+  CompileRun("function test(x) { return 1 + Math.sin(x) }");
+  CompileRun(
+      "test(0.5); test(0.6);"
+      "%OptimizeFunctionOnNextCall(test); test(0.7);");
+  CHECK_EQ(0, break_point_hit_count);
+
+  // Run with breakpoint.
+  bp = SetBreakPoint(builtin, 0);
+  CompileRun("Math.sin(0.1);");
+  CHECK_EQ(1, break_point_hit_count);
+  CompileRun("test(0.2);");
+  CHECK_EQ(2, break_point_hit_count);
+
+  // Re-optimize.
+  CompileRun("%OptimizeFunctionOnNextCall(test);");
+  CompileRun("test(0.3);");
+  CHECK_EQ(3, break_point_hit_count);
+
+  // Run without breakpoints.
+  ClearBreakPoint(bp);
+  CompileRun("test(0.3);");
+  CHECK_EQ(3, break_point_hit_count);
+
+  SetDebugEventListener(env->GetIsolate(), nullptr);
+  CheckDebuggerUnloaded();
+}
+
+TEST(BreakPointInlining) {
+  i::FLAG_allow_natives_syntax = true;
+  break_point_hit_count = 0;
+  DebugLocalContext env;
+  v8::HandleScope scope(env->GetIsolate());
+
+  SetDebugEventListener(env->GetIsolate(), DebugEventBreakPointHitCount);
+
+  break_point_hit_count = 0;
+  v8::Local<v8::Function> inlinee =
+      CompileRun("function f(x) { return x*2; } f").As<v8::Function>();
+  CompileRun("function test(x) { return 1 + f(x) }");
+  CompileRun(
+      "test(0.5); test(0.6);"
+      "%OptimizeFunctionOnNextCall(test); test(0.7);");
+  CHECK_EQ(0, break_point_hit_count);
+
+  // Run with breakpoint.
+  int bp = SetBreakPoint(inlinee, 0);
+  CompileRun("f(0.1);");
+  CHECK_EQ(1, break_point_hit_count);
+  CompileRun("test(0.2);");
+  CHECK_EQ(2, break_point_hit_count);
+
+  // Re-optimize.
+  CompileRun("%OptimizeFunctionOnNextCall(test);");
+  CompileRun("test(0.3);");
+  CHECK_EQ(3, break_point_hit_count);
+
+  // Run without breakpoints.
+  ClearBreakPoint(bp);
+  CompileRun("test(0.3);");
+  CHECK_EQ(3, break_point_hit_count);
+
+  SetDebugEventListener(env->GetIsolate(), nullptr);
+  CheckDebuggerUnloaded();
+}
 
 static void CallWithBreakPoints(v8::Local<v8::Context> context,
                                 v8::Local<v8::Object> recv,
@@ -1161,7 +1238,7 @@ static void CallWithBreakPoints(v8::Local<v8::Context> context,
                                 int break_point_count, int call_count) {
   break_point_hit_count = 0;
   for (int i = 0; i < call_count; i++) {
-    f->Call(context, recv, 0, NULL).ToLocalChecked();
+    f->Call(context, recv, 0, nullptr).ToLocalChecked();
     CHECK_EQ((i + 1) * break_point_count, break_point_hit_count);
   }
 }
@@ -1203,7 +1280,7 @@ TEST(GCDuringBreakPointProcessing) {
   CallWithBreakPoints(context, env->Global(), foo, 1, 25);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -1215,17 +1292,17 @@ static void CallAndGC(v8::Local<v8::Context> context,
 
   for (int i = 0; i < 3; i++) {
     // Call function.
-    f->Call(context, recv, 0, NULL).ToLocalChecked();
+    f->Call(context, recv, 0, nullptr).ToLocalChecked();
     CHECK_EQ(1 + i * 3, break_point_hit_count);
 
     // Scavenge and call function.
     CcTest::CollectGarbage(v8::internal::NEW_SPACE);
-    f->Call(context, recv, 0, NULL).ToLocalChecked();
+    f->Call(context, recv, 0, nullptr).ToLocalChecked();
     CHECK_EQ(2 + i * 3, break_point_hit_count);
 
     // Mark sweep (and perhaps compact) and call function.
     CcTest::CollectAllGarbage();
-    f->Call(context, recv, 0, NULL).ToLocalChecked();
+    f->Call(context, recv, 0, nullptr).ToLocalChecked();
     CHECK_EQ(3 + i * 3, break_point_hit_count);
   }
 }
@@ -1284,7 +1361,7 @@ TEST(BreakPointSurviveGC) {
   CallAndGC(context, env->Global(), foo);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -1336,7 +1413,7 @@ TEST(BreakPointThroughJavaScript) {
   CHECK_EQ(8, break_point_hit_count);
 
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 
   // Make sure that the break point numbers are consecutive.
   CHECK_EQ(1, bp1);
@@ -1388,33 +1465,33 @@ TEST(ScriptBreakPointByNameThroughJavaScript) {
 
   // Call f and g without break points.
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   // Call f and g with break point on line 12.
   int sbp1 = SetScriptBreakPointByNameFromJS(isolate, "test", 12, 0);
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
 
   // Remove the break point again.
   break_point_hit_count = 0;
   ClearBreakPointFromJS(env->GetIsolate(), sbp1);
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   // Call f and g with break point on line 2.
   int sbp2 = SetScriptBreakPointByNameFromJS(env->GetIsolate(), "test", 2, 0);
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   // Call f and g with break point on line 2, 4, 12, 14 and 15.
@@ -1423,9 +1500,9 @@ TEST(ScriptBreakPointByNameThroughJavaScript) {
   int sbp5 = SetScriptBreakPointByNameFromJS(isolate, "test", 14, 0);
   int sbp6 = SetScriptBreakPointByNameFromJS(isolate, "test", 15, 0);
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(7, break_point_hit_count);
 
   // Remove all the break points again.
@@ -1435,13 +1512,13 @@ TEST(ScriptBreakPointByNameThroughJavaScript) {
   ClearBreakPointFromJS(isolate, sbp4);
   ClearBreakPointFromJS(isolate, sbp5);
   ClearBreakPointFromJS(isolate, sbp6);
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 
   // Make sure that the break point numbers are consecutive.
   CHECK_EQ(1, sbp1);
@@ -1497,33 +1574,33 @@ TEST(ScriptBreakPointByIdThroughJavaScript) {
 
   // Call f and g without break points.
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   // Call f and g with break point on line 12.
   int sbp1 = SetScriptBreakPointByIdFromJS(env->GetIsolate(), script_id, 12, 0);
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
 
   // Remove the break point again.
   break_point_hit_count = 0;
   ClearBreakPointFromJS(env->GetIsolate(), sbp1);
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   // Call f and g with break point on line 2.
   int sbp2 = SetScriptBreakPointByIdFromJS(env->GetIsolate(), script_id, 2, 0);
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   // Call f and g with break point on line 2, 4, 12, 14 and 15.
@@ -1532,9 +1609,9 @@ TEST(ScriptBreakPointByIdThroughJavaScript) {
   int sbp5 = SetScriptBreakPointByIdFromJS(env->GetIsolate(), script_id, 14, 0);
   int sbp6 = SetScriptBreakPointByIdFromJS(env->GetIsolate(), script_id, 15, 0);
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(7, break_point_hit_count);
 
   // Remove all the break points again.
@@ -1544,13 +1621,13 @@ TEST(ScriptBreakPointByIdThroughJavaScript) {
   ClearBreakPointFromJS(env->GetIsolate(), sbp4);
   ClearBreakPointFromJS(env->GetIsolate(), sbp5);
   ClearBreakPointFromJS(env->GetIsolate(), sbp6);
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 
   // Make sure that the break point numbers are consecutive.
   CHECK_EQ(1, sbp1);
@@ -1592,23 +1669,23 @@ TEST(EnableDisableScriptBreakPoint) {
 
   // Call f while enabeling and disabling the script break point.
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
 
   DisableScriptBreakPointFromJS(isolate, sbp);
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
 
   EnableScriptBreakPointFromJS(isolate, sbp);
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   DisableScriptBreakPointFromJS(isolate, sbp);
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -1648,23 +1725,23 @@ TEST(ConditionalScriptBreakPoint) {
   // Call f with different conditions on the script break point.
   break_point_hit_count = 0;
   ChangeScriptBreakPointConditionFromJS(env->GetIsolate(), sbp1, "false");
-  f->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   ChangeScriptBreakPointConditionFromJS(env->GetIsolate(), sbp1, "true");
   break_point_hit_count = 0;
-  f->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
 
   ChangeScriptBreakPointConditionFromJS(env->GetIsolate(), sbp1, "x % 2 == 0");
   break_point_hit_count = 0;
   for (int i = 0; i < 10; i++) {
-    f->Call(env.context(), env->Global(), 0, NULL).ToLocalChecked();
+    f->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
   }
   CHECK_EQ(5, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -1714,9 +1791,9 @@ TEST(ScriptBreakPointMultiple) {
 
   // Call f and g and check that the script break point is active.
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   // Clear the script break point.
@@ -1724,9 +1801,9 @@ TEST(ScriptBreakPointMultiple) {
 
   // Call f and g and check that the script break point is no longer active.
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   // Set script break point with the scripts loaded.
@@ -1734,13 +1811,13 @@ TEST(ScriptBreakPointMultiple) {
 
   // Call f and g and check that the script break point is active.
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -1784,7 +1861,7 @@ TEST(ScriptBreakPointLineOffset) {
 
   // Call f and check that the script break point is active.
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   // Clear the script break points.
@@ -1793,7 +1870,7 @@ TEST(ScriptBreakPointLineOffset) {
 
   // Call f and check that no script break points are active.
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   // Set a script break point with the script loaded.
@@ -1801,11 +1878,11 @@ TEST(ScriptBreakPointLineOffset) {
 
   // Call f and check that the script break point is active.
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -1871,12 +1948,12 @@ TEST(ScriptBreakPointLine) {
   CHECK_EQ(0, StrLength(last_function_hit));
 
   // Call f and check that the script break point.
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
   CHECK_EQ(0, strcmp("f", last_function_hit));
 
   // Call g and check that the script break point.
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(3, break_point_hit_count);
   CHECK_EQ(0, strcmp("g", last_function_hit));
 
@@ -1886,7 +1963,7 @@ TEST(ScriptBreakPointLine) {
       SetScriptBreakPointByNameFromJS(env->GetIsolate(), "test.html", 6, -1);
 
   // Call g and check that the script break point in h is hit.
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(4, break_point_hit_count);
   CHECK_EQ(0, strcmp("h", last_function_hit));
 
@@ -1898,8 +1975,8 @@ TEST(ScriptBreakPointLine) {
   int sbp5 =
       SetScriptBreakPointByNameFromJS(env->GetIsolate(), "test.html", 4, -1);
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   // Set a break point in the code after the last function decleration.
@@ -1919,7 +1996,7 @@ TEST(ScriptBreakPointLine) {
   ClearBreakPointFromJS(env->GetIsolate(), sbp6);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -1954,7 +2031,7 @@ TEST(ScriptBreakPointLineTopLevel) {
 
   // Call f and check that there was no break points.
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   // Recompile and run script and check that break point was not reapplied.
@@ -1963,7 +2040,7 @@ TEST(ScriptBreakPointLineTopLevel) {
   CHECK_EQ(0, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -1995,7 +2072,7 @@ TEST(ScriptBreakPointTopLevelCrash) {
   ClearBreakPointFromJS(env->GetIsolate(), sbp2);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2015,15 +2092,15 @@ TEST(RemoveBreakPointInBreak) {
   debug_event_remove_break_point = SetBreakPoint(foo, 0);
 
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
 
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(0, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2054,15 +2131,15 @@ TEST(DebuggerStatement) {
           .ToLocalChecked());
 
   // Run function with debugger statement
-  bar->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  bar->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
 
   // Run function with two debugger statement
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(3, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2084,18 +2161,18 @@ TEST(DebuggerStatementBreakpoint) {
             .ToLocalChecked());
 
     // The debugger statement triggers breakpoint hit
-    foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+    foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
     CHECK_EQ(1, break_point_hit_count);
 
     int bp = SetBreakPoint(foo, 0);
 
     // Set breakpoint does not duplicate hits
-    foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+    foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
     CHECK_EQ(2, break_point_hit_count);
 
     ClearBreakPoint(bp);
     SetDebugEventListener(env->GetIsolate(), nullptr);
-    CheckDebuggerUnloaded(env->GetIsolate());
+    CheckDebuggerUnloaded();
 }
 
 
@@ -2118,15 +2195,15 @@ TEST(DebugEvaluate) {
   // d = Hello, world!).
   struct EvaluateCheck checks_uu[] = {{"x", v8::Undefined(isolate)},
                                       {"a", v8::Undefined(isolate)},
-                                      {NULL, v8::Local<v8::Value>()}};
+                                      {nullptr, v8::Local<v8::Value>()}};
   struct EvaluateCheck checks_hu[] = {
       {"x", v8_str(env->GetIsolate(), "Hello, world!")},
       {"a", v8::Undefined(isolate)},
-      {NULL, v8::Local<v8::Value>()}};
+      {nullptr, v8::Local<v8::Value>()}};
   struct EvaluateCheck checks_hh[] = {
       {"x", v8_str(env->GetIsolate(), "Hello, world!")},
       {"a", v8_str(env->GetIsolate(), "Hello, world!")},
-      {NULL, v8::Local<v8::Value>()}};
+      {nullptr, v8::Local<v8::Value>()}};
 
   // Simple test function. The "y=0" is in the function foo to provide a break
   // location. For "y=0" the "y" is at position 15 in the foo function
@@ -2151,7 +2228,7 @@ TEST(DebugEvaluate) {
   // Call foo with breakpoint set before a=x and undefined as parameter.
   int bp = SetBreakPoint(foo, foo_break_position_1);
   checks = checks_uu;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // Call foo with breakpoint set before a=x and parameter "Hello, world!".
   checks = checks_hu;
@@ -2235,7 +2312,7 @@ TEST(DebugEvaluate) {
   bar->Call(context, env->Global(), 2, argv_bar_3).ToLocalChecked();
 
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2267,77 +2344,11 @@ TEST(ConditionalBreakpointWithCodeGenerationDisallowed) {
 
   debugEventCount = 0;
   env->AllowCodeGenerationFromStrings(false);
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, debugEventCount);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
-}
-
-
-bool checkedDebugEvals = true;
-v8::Local<v8::Function> checkGlobalEvalFunction;
-v8::Local<v8::Function> checkFrameEvalFunction;
-static void CheckDebugEval(const v8::Debug::EventDetails& eventDetails) {
-  if (eventDetails.GetEvent() == v8::Break) {
-    ++debugEventCount;
-    v8::HandleScope handleScope(CcTest::isolate());
-
-    v8::Local<v8::Value> args[] = {eventDetails.GetExecutionState()};
-    CHECK(
-        checkGlobalEvalFunction->Call(eventDetails.GetEventContext(),
-                                      eventDetails.GetEventContext()->Global(),
-                                      1, args)
-            .ToLocalChecked()
-            ->IsTrue());
-    CHECK(checkFrameEvalFunction->Call(eventDetails.GetEventContext(),
-                                       eventDetails.GetEventContext()->Global(),
-                                       1, args)
-              .ToLocalChecked()
-              ->IsTrue());
-  }
-}
-
-
-// Test that the evaluation of expressions when a break point is hit generates
-// the correct results in case code generation from strings is disallowed in the
-// debugee context.
-TEST(DebugEvaluateWithCodeGenerationDisallowed) {
-  DebugLocalContext env;
-  v8::HandleScope scope(env->GetIsolate());
-  env.ExposeDebug();
-
-  SetDebugEventListener(env->GetIsolate(), CheckDebugEval);
-
-  v8::Local<v8::Context> context = env.context();
-  v8::Local<v8::Function> foo = CompileFunction(&env,
-    "var global = 'Global';\n"
-    "function foo(x) {\n"
-    "  var local = 'Local';\n"
-    "  debugger;\n"
-    "  return local + x;\n"
-    "}",
-    "foo");
-  checkGlobalEvalFunction = CompileFunction(&env,
-    "function checkGlobalEval(exec_state) {\n"
-    "  return exec_state.evaluateGlobal('global').value() === 'Global';\n"
-    "}",
-    "checkGlobalEval");
-
-  checkFrameEvalFunction = CompileFunction(&env,
-    "function checkFrameEval(exec_state) {\n"
-    "  return exec_state.frame(0).evaluate('local').value() === 'Local';\n"
-    "}",
-    "checkFrameEval");
-  debugEventCount = 0;
-  env->AllowCodeGenerationFromStrings(false);
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
-  CHECK_EQ(1, debugEventCount);
-
-  checkGlobalEvalFunction.Clear();
-  checkFrameEvalFunction.Clear();
-  SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2362,26 +2373,26 @@ TEST(DebugStepLinear) {
   step_action = StepIn;
   break_point_hit_count = 0;
   v8::Local<v8::Context> context = env.context();
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // With stepping all break locations are hit.
   CHECK_EQ(4, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 
   // Register a debug event listener which just counts.
   SetDebugEventListener(env->GetIsolate(), DebugEventBreakPointHitCount);
 
   SetBreakPoint(foo, 3);
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // Without stepping only active break points are hit.
   CHECK_EQ(1, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2432,7 +2443,7 @@ TEST(DebugStepKeyedLoadLoop) {
   CHECK_EQ(44, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2482,7 +2493,7 @@ TEST(DebugStepKeyedStoreLoop) {
   CHECK_EQ(44, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2515,19 +2526,19 @@ TEST(DebugStepNamedLoadLoop) {
           "foo");
 
   // Call function without any break points to ensure inlining is in place.
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // Set up break point and step through the function.
   SetBreakPoint(foo, 4);
   step_action = StepNext;
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // With stepping all break locations are hit.
   CHECK_EQ(65, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2551,19 +2562,19 @@ static void DoDebugStepNamedStoreLoop(int expected) {
           "foo");
 
   // Call function without any break points to ensure inlining is in place.
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // Set up break point and step through the function.
   SetBreakPoint(foo, 3);
   step_action = StepNext;
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // With stepping all expected break locations are hit.
   CHECK_EQ(expected, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2595,26 +2606,26 @@ TEST(DebugStepLinearMixedICs) {
 
   step_action = StepIn;
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // With stepping all break locations are hit.
   CHECK_EQ(10, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 
   // Register a debug event listener which just counts.
   SetDebugEventListener(env->GetIsolate(), DebugEventBreakPointHitCount);
 
   SetBreakPoint(foo, 0);
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // Without stepping only active break points are hit.
   CHECK_EQ(1, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2643,12 +2654,12 @@ TEST(DebugStepDeclarations) {
   // Stepping through the declarations.
   step_action = StepIn;
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(5, break_point_hit_count);
 
   // Get rid of the debug event listener.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2677,12 +2688,12 @@ TEST(DebugStepLocals) {
   // Stepping through the declarations.
   step_action = StepIn;
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(5, break_point_hit_count);
 
   // Get rid of the debug event listener.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2727,7 +2738,7 @@ TEST(DebugStepIf) {
 
   // Get rid of the debug event listener.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2785,7 +2796,7 @@ TEST(DebugStepSwitch) {
 
   // Get rid of the debug event listener.
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2834,7 +2845,7 @@ TEST(DebugStepWhile) {
 
   // Get rid of the debug event listener.
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2883,7 +2894,7 @@ TEST(DebugStepDoWhile) {
 
   // Get rid of the debug event listener.
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2933,7 +2944,7 @@ TEST(DebugStepFor) {
 
   // Get rid of the debug event listener.
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -2986,7 +2997,7 @@ TEST(DebugStepForContinue) {
 
   // Get rid of the debug event listener.
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3040,7 +3051,7 @@ TEST(DebugStepForBreak) {
 
   // Get rid of the debug event listener.
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3067,7 +3078,7 @@ TEST(DebugStepForIn) {
 
   step_action = StepIn;
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(8, break_point_hit_count);
 
   // Create a function for testing stepping. Run it to allow it to get
@@ -3084,12 +3095,12 @@ TEST(DebugStepForIn) {
 
   step_action = StepIn;
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(10, break_point_hit_count);
 
   // Get rid of the debug event listener.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3119,12 +3130,12 @@ TEST(DebugStepWith) {
 
   step_action = StepIn;
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(4, break_point_hit_count);
 
   // Get rid of the debug event listener.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3149,7 +3160,7 @@ TEST(DebugConditional) {
 
   step_action = StepIn;
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   step_action = StepIn;
@@ -3161,7 +3172,7 @@ TEST(DebugConditional) {
 
   // Get rid of the debug event listener.
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3191,7 +3202,7 @@ TEST(StepInOutSimple) {
   step_action = StepIn;
   break_point_hit_count = 0;
   expected_step_sequence = "abcbaca";
-  a->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  a->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(StrLength(expected_step_sequence),
            break_point_hit_count);
 
@@ -3199,7 +3210,7 @@ TEST(StepInOutSimple) {
   step_action = StepNext;
   break_point_hit_count = 0;
   expected_step_sequence = "aaa";
-  a->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  a->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(StrLength(expected_step_sequence),
            break_point_hit_count);
 
@@ -3207,13 +3218,13 @@ TEST(StepInOutSimple) {
   step_action = StepOut;
   break_point_hit_count = 0;
   expected_step_sequence = "a";
-  a->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  a->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(StrLength(expected_step_sequence),
            break_point_hit_count);
 
   // Get rid of the debug event listener.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3244,7 +3255,7 @@ TEST(StepInOutTree) {
   step_action = StepIn;
   break_point_hit_count = 0;
   expected_step_sequence = "adacadabcbadacada";
-  a->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  a->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(StrLength(expected_step_sequence),
            break_point_hit_count);
 
@@ -3252,7 +3263,7 @@ TEST(StepInOutTree) {
   step_action = StepNext;
   break_point_hit_count = 0;
   expected_step_sequence = "aaaa";
-  a->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  a->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(StrLength(expected_step_sequence),
            break_point_hit_count);
 
@@ -3260,13 +3271,13 @@ TEST(StepInOutTree) {
   step_action = StepOut;
   break_point_hit_count = 0;
   expected_step_sequence = "a";
-  a->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  a->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(StrLength(expected_step_sequence),
            break_point_hit_count);
 
   // Get rid of the debug event listener.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate(), true);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3296,13 +3307,13 @@ TEST(StepInOutBranch) {
   step_action = StepIn;
   break_point_hit_count = 0;
   expected_step_sequence = "abbaca";
-  a->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  a->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(StrLength(expected_step_sequence),
            break_point_hit_count);
 
   // Get rid of the debug event listener.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3323,25 +3334,25 @@ TEST(DebugStepNatives) {
   v8::Local<v8::Context> context = env.context();
   step_action = StepIn;
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // With stepping all break locations are hit.
   CHECK_EQ(3, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 
   // Register a debug event listener which just counts.
   SetDebugEventListener(env->GetIsolate(), DebugEventBreakPointHitCount);
 
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // Without stepping only active break points are hit.
   CHECK_EQ(1, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3363,25 +3374,25 @@ TEST(DebugStepFunctionApply) {
   v8::Local<v8::Context> context = env.context();
   step_action = StepIn;
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // With stepping all break locations are hit.
   CHECK_EQ(7, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 
   // Register a debug event listener which just counts.
   SetDebugEventListener(env->GetIsolate(), DebugEventBreakPointHitCount);
 
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // Without stepping only the debugger statement is hit.
   CHECK_EQ(1, break_point_hit_count);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3411,7 +3422,7 @@ TEST(DebugStepFunctionCall) {
 
   // Check stepping where the if condition in bar is false.
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(6, break_point_hit_count);
 
   // Check stepping where the if condition in bar is true.
@@ -3422,19 +3433,19 @@ TEST(DebugStepFunctionCall) {
   CHECK_EQ(8, break_point_hit_count);
 
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 
   // Register a debug event listener which just counts.
   SetDebugEventListener(isolate, DebugEventBreakPointHitCount);
 
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // Without stepping only the debugger statement is hit.
   CHECK_EQ(1, break_point_hit_count);
 
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3461,23 +3472,23 @@ TEST(DebugStepFunctionCallApply) {
   step_action = StepIn;
 
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(6, break_point_hit_count);
 
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 
   // Register a debug event listener which just counts.
   SetDebugEventListener(isolate, DebugEventBreakPointHitCount);
 
   break_point_hit_count = 0;
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // Without stepping only the debugger statement is hit.
   CHECK_EQ(1, break_point_hit_count);
 
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3512,7 +3523,7 @@ TEST(PauseInScript) {
 
   // Get rid of the debug event listener.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3559,117 +3570,117 @@ TEST(BreakOnException) {
   // Initial state should be no break on exceptions.
   DebugEventCounterClear();
   MessageCallbackCountClear();
-  caught->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  caught->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(0, 0, 0);
-  CHECK(notCaught->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaught->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(0, 0, 1);
-  CHECK(notCaughtFinally->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaughtFinally->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(0, 0, 2);
-  edgeCaseFinally->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  edgeCaseFinally->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(0, 0, 2);
 
   // No break on exception
   DebugEventCounterClear();
   MessageCallbackCountClear();
   ChangeBreakOnException(false, false);
-  caught->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  caught->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(0, 0, 0);
-  CHECK(notCaught->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaught->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(0, 0, 1);
-  CHECK(notCaughtFinally->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaughtFinally->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(0, 0, 2);
-  edgeCaseFinally->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  edgeCaseFinally->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(0, 0, 2);
 
   // Break on uncaught exception
   DebugEventCounterClear();
   MessageCallbackCountClear();
   ChangeBreakOnException(false, true);
-  caught->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  caught->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(0, 0, 0);
-  CHECK(notCaught->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaught->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(1, 1, 1);
-  CHECK(notCaughtFinally->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaughtFinally->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(2, 2, 2);
-  edgeCaseFinally->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  edgeCaseFinally->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(3, 3, 2);
 
   // Break on exception and uncaught exception
   DebugEventCounterClear();
   MessageCallbackCountClear();
   ChangeBreakOnException(true, true);
-  caught->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  caught->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(1, 0, 0);
-  CHECK(notCaught->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaught->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(2, 1, 1);
-  CHECK(notCaughtFinally->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaughtFinally->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(3, 2, 2);
-  edgeCaseFinally->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  edgeCaseFinally->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(4, 3, 2);
 
   // Break on exception
   DebugEventCounterClear();
   MessageCallbackCountClear();
   ChangeBreakOnException(true, false);
-  caught->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  caught->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(1, 0, 0);
-  CHECK(notCaught->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaught->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(2, 1, 1);
-  CHECK(notCaughtFinally->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaughtFinally->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(3, 2, 2);
-  edgeCaseFinally->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  edgeCaseFinally->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(4, 3, 2);
 
   // No break on exception using JavaScript
   DebugEventCounterClear();
   MessageCallbackCountClear();
   ChangeBreakOnExceptionFromJS(env->GetIsolate(), false, false);
-  caught->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  caught->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(0, 0, 0);
-  CHECK(notCaught->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaught->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(0, 0, 1);
-  CHECK(notCaughtFinally->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaughtFinally->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(0, 0, 2);
-  edgeCaseFinally->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  edgeCaseFinally->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(0, 0, 2);
 
   // Break on uncaught exception using JavaScript
   DebugEventCounterClear();
   MessageCallbackCountClear();
   ChangeBreakOnExceptionFromJS(env->GetIsolate(), false, true);
-  caught->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  caught->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(0, 0, 0);
-  CHECK(notCaught->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaught->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(1, 1, 1);
-  CHECK(notCaughtFinally->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaughtFinally->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(2, 2, 2);
-  edgeCaseFinally->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  edgeCaseFinally->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(3, 3, 2);
 
   // Break on exception and uncaught exception using JavaScript
   DebugEventCounterClear();
   MessageCallbackCountClear();
   ChangeBreakOnExceptionFromJS(env->GetIsolate(), true, true);
-  caught->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  caught->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(1, 0, 0);
-  CHECK(notCaught->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaught->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(2, 1, 1);
-  CHECK(notCaughtFinally->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaughtFinally->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(3, 2, 2);
-  edgeCaseFinally->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  edgeCaseFinally->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(4, 3, 2);
 
   // Break on exception using JavaScript
   DebugEventCounterClear();
   MessageCallbackCountClear();
   ChangeBreakOnExceptionFromJS(env->GetIsolate(), true, false);
-  caught->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  caught->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(1, 0, 0);
-  CHECK(notCaught->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaught->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(2, 1, 1);
-  CHECK(notCaughtFinally->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaughtFinally->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(3, 2, 2);
-  edgeCaseFinally->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  edgeCaseFinally->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(4, 3, 2);
 
   // No break on exception using native API
@@ -3677,13 +3688,13 @@ TEST(BreakOnException) {
   MessageCallbackCountClear();
   ChangeBreakOnExceptionFromAPI(env->GetIsolate(),
                                 v8::debug::NoBreakOnException);
-  caught->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  caught->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(0, 0, 0);
-  CHECK(notCaught->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaught->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(0, 0, 1);
-  CHECK(notCaughtFinally->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaughtFinally->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(0, 0, 2);
-  edgeCaseFinally->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  edgeCaseFinally->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(0, 0, 2);
 
   // // Break on uncaught exception using native API
@@ -3691,13 +3702,13 @@ TEST(BreakOnException) {
   MessageCallbackCountClear();
   ChangeBreakOnExceptionFromAPI(env->GetIsolate(),
                                 v8::debug::BreakOnUncaughtException);
-  caught->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  caught->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(0, 0, 0);
-  CHECK(notCaught->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaught->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(1, 1, 1);
-  CHECK(notCaughtFinally->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaughtFinally->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(2, 2, 2);
-  edgeCaseFinally->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  edgeCaseFinally->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(3, 3, 2);
 
   // // Break on exception and uncaught exception using native API
@@ -3705,17 +3716,17 @@ TEST(BreakOnException) {
   MessageCallbackCountClear();
   ChangeBreakOnExceptionFromAPI(env->GetIsolate(),
                                 v8::debug::BreakOnAnyException);
-  caught->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  caught->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(1, 0, 0);
-  CHECK(notCaught->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaught->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(2, 1, 1);
-  CHECK(notCaughtFinally->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(notCaughtFinally->Call(context, env->Global(), 0, nullptr).IsEmpty());
   DebugEventCounterCheck(3, 2, 2);
-  edgeCaseFinally->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  edgeCaseFinally->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   DebugEventCounterCheck(4, 3, 2);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
   env->GetIsolate()->RemoveMessageListeners(MessageCallbackCount);
 }
 
@@ -3849,7 +3860,7 @@ TEST(StepWithException) {
   step_action = StepIn;
   break_point_hit_count = 0;
   expected_step_sequence = "aa";
-  CHECK(a->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(a->Call(context, env->Global(), 0, nullptr).IsEmpty());
   CHECK_EQ(StrLength(expected_step_sequence),
            break_point_hit_count);
 
@@ -3860,7 +3871,7 @@ TEST(StepWithException) {
   step_action = StepIn;
   break_point_hit_count = 0;
   expected_step_sequence = "bcc";
-  CHECK(b->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(b->Call(context, env->Global(), 0, nullptr).IsEmpty());
   CHECK_EQ(StrLength(expected_step_sequence),
            break_point_hit_count);
 
@@ -3872,7 +3883,7 @@ TEST(StepWithException) {
   step_action = StepIn;
   break_point_hit_count = 0;
   expected_step_sequence = "ddedd";
-  d->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  d->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(StrLength(expected_step_sequence),
            break_point_hit_count);
 
@@ -3881,7 +3892,7 @@ TEST(StepWithException) {
   step_action = StepIn;
   break_point_hit_count = 0;
   expected_step_sequence = "ddeedd";
-  d->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  d->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(StrLength(expected_step_sequence),
            break_point_hit_count);
 
@@ -3893,7 +3904,7 @@ TEST(StepWithException) {
   step_action = StepIn;
   break_point_hit_count = 0;
   expected_step_sequence = "ffghhff";
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(StrLength(expected_step_sequence),
            break_point_hit_count);
 
@@ -3902,13 +3913,13 @@ TEST(StepWithException) {
   step_action = StepIn;
   break_point_hit_count = 0;
   expected_step_sequence = "ffghhhff";
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(StrLength(expected_step_sequence),
            break_point_hit_count);
 
   // Get rid of the debug event listener.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -3941,10 +3952,10 @@ TEST(DebugBreak) {
       v8::Number::New(isolate, 1), v8::Number::New(isolate, 1)};
 
   // Call all functions to make sure that they are compiled.
-  f0->Call(context, env->Global(), 0, NULL).ToLocalChecked();
-  f1->Call(context, env->Global(), 0, NULL).ToLocalChecked();
-  f2->Call(context, env->Global(), 0, NULL).ToLocalChecked();
-  f3->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f0->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
+  f1->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
+  f2->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
+  f3->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // Set the debug break flag.
   v8::debug::DebugBreak(env->GetIsolate());
@@ -3959,13 +3970,109 @@ TEST(DebugBreak) {
   }
 
   // One break for each function called.
-  CHECK(4 * arraysize(argv) == break_point_hit_count);
+  CHECK_EQ(4 * arraysize(argv), break_point_hit_count);
 
   // Get rid of the debug event listener.
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
+static void DebugScopingListener(const v8::Debug::EventDetails& event_details) {
+  v8::DebugEvent event = event_details.GetEvent();
+  if (event != v8::Exception) return;
+
+  auto stack_traces = v8::debug::StackTraceIterator::Create(CcTest::isolate());
+  v8::debug::Location location = stack_traces->GetSourceLocation();
+  CHECK_EQ(26, location.GetColumnNumber());
+  CHECK_EQ(0, location.GetLineNumber());
+
+  auto scopes = stack_traces->GetScopeIterator();
+  CHECK_EQ(v8::debug::ScopeIterator::ScopeTypeWith, scopes->GetType());
+  CHECK_EQ(20, scopes->GetStartLocation().GetColumnNumber());
+  CHECK_EQ(31, scopes->GetEndLocation().GetColumnNumber());
+
+  scopes->Advance();
+  CHECK_EQ(v8::debug::ScopeIterator::ScopeTypeLocal, scopes->GetType());
+  CHECK_EQ(0, scopes->GetStartLocation().GetColumnNumber());
+  CHECK_EQ(68, scopes->GetEndLocation().GetColumnNumber());
+
+  scopes->Advance();
+  CHECK_EQ(v8::debug::ScopeIterator::ScopeTypeGlobal, scopes->GetType());
+  CHECK(scopes->GetFunction().IsEmpty());
+
+  scopes->Advance();
+  CHECK(scopes->Done());
+}
+
+TEST(DebugBreakInWrappedScript) {
+  i::FLAG_stress_compaction = false;
+#ifdef VERIFY_HEAP
+  i::FLAG_verify_heap = true;
+#endif
+  DebugLocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
+
+  // Register a debug event listener which sets the break flag and counts.
+  SetDebugEventListener(isolate, DebugScopingListener);
+
+  static const char* source =
+      //   0         1         2         3         4         5         6 7
+      "try { with({o : []}){ o[0](); } } catch (e) { return e.toString(); }";
+  static const char* expect = "TypeError: o[0] is not a function";
+
+  // For this test, we want to break on uncaught exceptions:
+  ChangeBreakOnException(true, true);
+
+  {
+    v8::ScriptCompiler::Source script_source(v8_str(source));
+    v8::Local<v8::Function> fun =
+        v8::ScriptCompiler::CompileFunctionInContext(
+            env.context(), &script_source, 0, nullptr, 0, nullptr)
+            .ToLocalChecked();
+    v8::Local<v8::Value> result =
+        fun->Call(env.context(), env->Global(), 0, nullptr).ToLocalChecked();
+    CHECK(result->IsString());
+    CHECK(v8::Local<v8::String>::Cast(result)
+              ->Equals(env.context(), v8_str(expect))
+              .FromJust());
+  }
+
+  // Get rid of the debug event listener.
+  SetDebugEventListener(isolate, nullptr);
+  CheckDebuggerUnloaded();
+}
+
+TEST(DebugBreakWithoutJS) {
+  i::FLAG_stress_compaction = false;
+#ifdef VERIFY_HEAP
+  i::FLAG_verify_heap = true;
+#endif
+  DebugLocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::Local<v8::Context> context = env.context();
+  v8::HandleScope scope(isolate);
+
+  // Register a debug event listener which sets the break flag and counts.
+  SetDebugEventListener(isolate, DebugEventBreak);
+
+  // Set the debug break flag.
+  v8::debug::DebugBreak(env->GetIsolate());
+
+  v8::Local<v8::String> json = v8_str("[1]");
+  v8::Local<v8::Value> parsed = v8::JSON::Parse(context, json).ToLocalChecked();
+  CHECK(v8::JSON::Stringify(context, parsed)
+            .ToLocalChecked()
+            ->Equals(context, json)
+            .FromJust());
+  CHECK_EQ(0, break_point_hit_count);
+  CompileRun("");
+  CHECK_EQ(1, break_point_hit_count);
+
+  // Get rid of the debug event listener.
+  SetDebugEventListener(isolate, nullptr);
+  CheckDebuggerUnloaded();
+}
 
 // Test to ensure that JavaScript code keeps running while the debug break
 // through the stack limit flag is set but breaks are disabled.
@@ -3990,23 +4097,23 @@ TEST(DisableBreak) {
 
   // Call all functions with different argument count.
   break_point_hit_count = 0;
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
 
   {
     v8::debug::DebugBreak(env->GetIsolate());
     i::Isolate* isolate = reinterpret_cast<i::Isolate*>(env->GetIsolate());
     v8::internal::DisableBreak disable_break(isolate->debug());
-    f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+    f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
     CHECK_EQ(1, break_point_hit_count);
   }
 
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
 
   // Get rid of the debug event listener.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 TEST(DisableDebuggerStatement) {
@@ -4052,12 +4159,12 @@ TEST(NoBreakWhenBootstrapping) {
     v8::HandleScope handle_scope(isolate);
     v8::Context::New(isolate, &extensions);
   }
-  // Check that no DebugBreak events occured during the context creation.
+  // Check that no DebugBreak events occurred during the context creation.
   CHECK_EQ(0, break_point_hit_count);
 
   // Get rid of the debug event listener.
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -4094,7 +4201,7 @@ static void IndexedEnum(const v8::PropertyCallbackInfo<v8::Array>& info) {
 static void NamedGetter(v8::Local<v8::Name> name,
                         const v8::PropertyCallbackInfo<v8::Value>& info) {
   if (name->IsSymbol()) return;
-  v8::String::Utf8Value n(v8::Local<v8::String>::Cast(name));
+  v8::String::Utf8Value n(CcTest::isolate(), v8::Local<v8::String>::Cast(name));
   if (strcmp(*n, "a") == 0) {
     info.GetReturnValue().Set(v8_str(info.GetIsolate(), "AA"));
     return;
@@ -4108,7 +4215,6 @@ static void NamedGetter(v8::Local<v8::Name> name,
     info.GetReturnValue().SetUndefined();
     return;
   }
-  info.GetReturnValue().Set(name);
 }
 
 
@@ -4129,7 +4235,7 @@ TEST(InterceptorPropertyMirror) {
   // Create object with named interceptor.
   v8::Local<v8::ObjectTemplate> named = v8::ObjectTemplate::New(isolate);
   named->SetHandler(v8::NamedPropertyHandlerConfiguration(
-      NamedGetter, NULL, NULL, NULL, NamedEnum));
+      NamedGetter, nullptr, nullptr, nullptr, NamedEnum));
   CHECK(env->Global()
             ->Set(context, v8_str(isolate, "intercepted_named"),
                   named->NewInstance(context).ToLocalChecked())
@@ -4138,7 +4244,7 @@ TEST(InterceptorPropertyMirror) {
   // Create object with indexed interceptor.
   v8::Local<v8::ObjectTemplate> indexed = v8::ObjectTemplate::New(isolate);
   indexed->SetHandler(v8::IndexedPropertyHandlerConfiguration(
-      IndexedGetter, NULL, NULL, NULL, IndexedEnum));
+      IndexedGetter, nullptr, nullptr, nullptr, IndexedEnum));
   CHECK(env->Global()
             ->Set(context, v8_str(isolate, "intercepted_indexed"),
                   indexed->NewInstance(context).ToLocalChecked())
@@ -4147,9 +4253,9 @@ TEST(InterceptorPropertyMirror) {
   // Create object with both named and indexed interceptor.
   v8::Local<v8::ObjectTemplate> both = v8::ObjectTemplate::New(isolate);
   both->SetHandler(v8::NamedPropertyHandlerConfiguration(
-      NamedGetter, NULL, NULL, NULL, NamedEnum));
+      NamedGetter, nullptr, nullptr, nullptr, NamedEnum));
   both->SetHandler(v8::IndexedPropertyHandlerConfiguration(
-      IndexedGetter, NULL, NULL, NULL, IndexedEnum));
+      IndexedGetter, nullptr, nullptr, nullptr, IndexedEnum));
   CHECK(env->Global()
             ->Set(context, v8_str(isolate, "intercepted_both"),
                   both->NewInstance(context).ToLocalChecked())
@@ -4405,8 +4511,8 @@ TEST(NativeGetterPropertyMirror) {
   v8::Local<v8::String> name = v8_str(isolate, "x");
   // Create object with named accessor.
   v8::Local<v8::ObjectTemplate> named = v8::ObjectTemplate::New(isolate);
-  named->SetAccessor(name, &ProtperyXNativeGetter, NULL, v8::Local<v8::Value>(),
-                     v8::DEFAULT, v8::None);
+  named->SetAccessor(name, &ProtperyXNativeGetter, nullptr,
+                     v8::Local<v8::Value>(), v8::DEFAULT, v8::None);
 
   // Create object with named property getter.
   CHECK(env->Global()
@@ -4451,7 +4557,7 @@ TEST(NativeGetterThrowingErrorPropertyMirror) {
   v8::Local<v8::String> name = v8_str(isolate, "x");
   // Create object with named accessor.
   v8::Local<v8::ObjectTemplate> named = v8::ObjectTemplate::New(isolate);
-  named->SetAccessor(name, &ProtperyXNativeGetterThrowingError, NULL,
+  named->SetAccessor(name, &ProtperyXNativeGetterThrowingError, nullptr,
                      v8::Local<v8::Value>(), v8::DEFAULT, v8::None);
 
   // Create object with named property getter.
@@ -4586,6 +4692,7 @@ TEST(NoHiddenProperties) {
 
 
 TEST(SetDebugEventListenerOnUninitializedVM) {
+  v8::HandleScope scope(CcTest::isolate());
   EnableDebugger(CcTest::isolate());
 }
 
@@ -4689,7 +4796,7 @@ TEST(CallFunctionInDebugger) {
   global_template->Set(v8_str(isolate, "CheckClosure"),
                        v8::FunctionTemplate::New(isolate, CheckClosure));
   v8::Local<v8::Context> context =
-      v8::Context::New(isolate, NULL, global_template);
+      v8::Context::New(isolate, nullptr, global_template);
   v8::Context::Scope context_scope(context);
 
   // Compile a function for checking the number of JavaScript frames.
@@ -4803,7 +4910,7 @@ TEST(DebuggerUnload) {
   DebugLocalContext env;
 
   // Check debugger is unloaded before it is used.
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 
   // Set a debug event listener.
   break_point_hit_count = 0;
@@ -4825,16 +4932,16 @@ TEST(DebuggerUnload) {
 
     // Make sure that the break points are there.
     break_point_hit_count = 0;
-    foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+    foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
     CHECK_EQ(2, break_point_hit_count);
-    bar->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+    bar->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
     CHECK_EQ(4, break_point_hit_count);
   }
 
   // Remove the debug event listener without clearing breakpoints. Do this
   // outside a handle scope.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate(), true);
+  CheckDebuggerUnloaded();
 }
 
 int event_listener_hit_count = 0;
@@ -4855,7 +4962,7 @@ TEST(DebuggerClearEventListenerWhileActive) {
   v8::HandleScope scope(env->GetIsolate());
 
   // Check debugger is unloaded before it is used.
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 
   // Set a debug event listener.
   SetDebugEventListener(env->GetIsolate(), EventListenerClearingItself);
@@ -4866,7 +4973,7 @@ TEST(DebuggerClearEventListenerWhileActive) {
   // The event listener should have been called.
   CHECK_EQ(1, event_listener_hit_count);
 
-  CheckDebuggerUnloaded(env->GetIsolate(), true);
+  CheckDebuggerUnloaded();
 }
 
 // Test for issue http://code.google.com/p/v8/issues/detail?id=289.
@@ -4959,7 +5066,7 @@ TEST(ScriptNameAndData) {
           ->Get(context, v8_str(env->GetIsolate(), "f"))
           .ToLocalChecked());
 
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
   CHECK_EQ(0, strcmp("name", last_script_name_hit));
 
@@ -4973,7 +5080,7 @@ TEST(ScriptNameAndData) {
       env->Global()
           ->Get(context, v8_str(env->GetIsolate(), "f"))
           .ToLocalChecked());
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, break_point_hit_count);
   CHECK_EQ(0, strcmp("name", last_script_name_hit));
 
@@ -4996,7 +5103,7 @@ TEST(ScriptNameAndData) {
       env->Global()
           ->Get(context, v8_str(env->GetIsolate(), "f"))
           .ToLocalChecked());
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(3, break_point_hit_count);
   CHECK_EQ(0, strcmp("new name", last_script_name_hit));
 
@@ -5007,7 +5114,7 @@ TEST(ScriptNameAndData) {
       env->Global()
           ->Get(context, v8_str(env->GetIsolate(), "f"))
           .ToLocalChecked());
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(4, break_point_hit_count);
 }
 
@@ -5039,8 +5146,10 @@ TEST(ContextData) {
   v8::Local<v8::ObjectTemplate> global_template =
       v8::Local<v8::ObjectTemplate>();
   v8::Local<v8::Value> global_object = v8::Local<v8::Value>();
-  context_1 = v8::Context::New(isolate, NULL, global_template, global_object);
-  context_2 = v8::Context::New(isolate, NULL, global_template, global_object);
+  context_1 =
+      v8::Context::New(isolate, nullptr, global_template, global_object);
+  context_2 =
+      v8::Context::New(isolate, nullptr, global_template, global_object);
 
   SetDebugEventListener(isolate, ContextCheckEventListener);
 
@@ -5065,7 +5174,7 @@ TEST(ContextData) {
     expected_context = context_1;
     expected_context_data = data_1;
     v8::Local<v8::Function> f = CompileFunction(isolate, source, "f");
-    f->Call(context_1, context_1->Global(), 0, NULL).ToLocalChecked();
+    f->Call(context_1, context_1->Global(), 0, nullptr).ToLocalChecked();
   }
 
 
@@ -5075,14 +5184,14 @@ TEST(ContextData) {
     expected_context = context_2;
     expected_context_data = data_2;
     v8::Local<v8::Function> f = CompileFunction(isolate, source, "f");
-    f->Call(context_2, context_2->Global(), 0, NULL).ToLocalChecked();
+    f->Call(context_2, context_2->Global(), 0, nullptr).ToLocalChecked();
   }
 
   // Two times compile event and two times break event.
   CHECK_GT(event_listener_hit_count, 3);
 
   SetDebugEventListener(isolate, nullptr);
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 // Debug event listener which issues a debug break when it hits a break event.
@@ -5120,10 +5229,10 @@ TEST(DebugBreakInEventListener) {
 
   // Call f then g. The debugger statement in f will cause a break which will
   // cause another break.
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, event_listener_break_hit_count);
   // Calling g will not cause any additional breaks.
-  g->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  g->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(2, event_listener_break_hit_count);
 }
 
@@ -5176,7 +5285,7 @@ TEST(RegExpDebugBreak) {
                                         frame_function_name_source,
                                         "frame_function_name");
 
-  // Test RegExp which matches white spaces and comments at the begining of a
+  // Test RegExp which matches white spaces and comments at the beginning of a
   // source line.
   const char* script =
     "var sourceLineBeginningSkip = /^(?:[ \\v\\h]*(?:\\/\\*.*?\\*\\/)*)*/;\n"
@@ -5211,8 +5320,7 @@ TEST(EvalContextData) {
   v8::Local<v8::Context> context_1;
   v8::Local<v8::ObjectTemplate> global_template =
       v8::Local<v8::ObjectTemplate>();
-  context_1 =
-      v8::Context::New(CcTest::isolate(), NULL, global_template);
+  context_1 = v8::Context::New(CcTest::isolate(), nullptr, global_template);
 
   SetDebugEventListener(CcTest::isolate(), ContextCheckEventListener);
 
@@ -5233,14 +5341,14 @@ TEST(EvalContextData) {
     expected_context = context_1;
     expected_context_data = data_1;
     v8::Local<v8::Function> f = CompileFunction(CcTest::isolate(), source, "f");
-    f->Call(context_1, context_1->Global(), 0, NULL).ToLocalChecked();
+    f->Call(context_1, context_1->Global(), 0, nullptr).ToLocalChecked();
   }
 
   SetDebugEventListener(CcTest::isolate(), nullptr);
 
   // One time compile event and one time break event.
   CHECK_GT(event_listener_hit_count, 2);
-  CheckDebuggerUnloaded(CcTest::isolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -5276,9 +5384,9 @@ TEST(AfterCompileEventWhenEventListenerIsReset) {
       ->Run(context)
       .ToLocalChecked();
 
-  // Setting listener to NULL should cause debugger unload.
+  // Setting listener to nullptr should cause debugger unload.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 
   // Compilation cache should be disabled when debugger is active.
   CHECK_EQ(2, after_compile_event_count);
@@ -5366,11 +5474,11 @@ TEST(BreakEventWhenEventListenerIsReset) {
       env->Global()
           ->Get(context, v8_str(env->GetIsolate(), "f"))
           .ToLocalChecked());
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
-  // Setting event listener to NULL should cause debugger unload.
+  // Setting event listener to nullptr should cause debugger unload.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 
   // Compilation cache should be disabled when debugger is active.
   CHECK_EQ(1, after_compile_event_count);
@@ -5406,11 +5514,11 @@ TEST(ExceptionEventWhenEventListenerIsReset) {
       env->Global()
           ->Get(context, v8_str(env->GetIsolate(), "f"))
           .ToLocalChecked());
-  CHECK(f->Call(context, env->Global(), 0, NULL).IsEmpty());
+  CHECK(f->Call(context, env->Global(), 0, nullptr).IsEmpty());
 
-  // Setting event listener to NULL should cause debugger unload.
+  // Setting event listener to nullptr should cause debugger unload.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 
   CHECK_EQ(1, exception_event_count);
 }
@@ -5455,7 +5563,7 @@ TEST(ProvisionalBreakpointOnLineOutOfRange) {
   ClearBreakPointFromJS(env->GetIsolate(), sbp1);
   ClearBreakPointFromJS(env->GetIsolate(), sbp2);
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 static void BreakEventListener(const v8::Debug::EventDetails& details) {
@@ -5485,13 +5593,13 @@ TEST(NoDebugBreakInAfterCompileEventListener) {
 
   // Set the debug break flag again.
   v8::debug::DebugBreak(env->GetIsolate());
-  f->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  f->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
   // There should be one more break event when the script is evaluated in 'f'.
   CHECK_EQ(2, break_point_hit_count);
 
   // Get rid of the debug event listener.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -5519,13 +5627,13 @@ TEST(DebugBreakFunctionApply) {
   // where this test would enter an infinite loop.
   break_point_hit_count = 0;
   max_break_point_hit_count = 10000;  // 10000 => infinite loop.
-  foo->Call(context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(context, env->Global(), 0, nullptr).ToLocalChecked();
 
   // When keeping the debug break several break will happen.
   CHECK_GT(break_point_hit_count, 1);
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -5538,7 +5646,7 @@ v8::Local<v8::Context> debugger_context;
 static void NamedGetterWithCallingContextCheck(
     v8::Local<v8::String> name,
     const v8::PropertyCallbackInfo<v8::Value>& info) {
-  CHECK_EQ(0, strcmp(*v8::String::Utf8Value(name), "a"));
+  CHECK_EQ(0, strcmp(*v8::String::Utf8Value(info.GetIsolate(), name), "a"));
   v8::Local<v8::Context> current = info.GetIsolate()->GetCurrentContext();
   CHECK(current == debugee_context);
   CHECK(current != debugger_context);
@@ -5602,13 +5710,13 @@ TEST(CallingContextIsNotDebugContext) {
       "foo");
 
   break_point_hit_count = 0;
-  foo->Call(debugee_context, env->Global(), 0, NULL).ToLocalChecked();
+  foo->Call(debugee_context, env->Global(), 0, nullptr).ToLocalChecked();
   CHECK_EQ(1, break_point_hit_count);
 
   SetDebugEventListener(isolate, nullptr);
   debugee_context = v8::Local<v8::Context>();
   debugger_context = v8::Local<v8::Context>();
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -5621,7 +5729,7 @@ static void DebugEventContextChecker(const v8::Debug::EventDetails& details) {
 }
 
 
-// Check that event details contain context where debug event occured.
+// Check that event details contain context where debug event occurred.
 TEST(DebugEventContext) {
   v8::Isolate* isolate = CcTest::isolate();
   v8::HandleScope scope(isolate);
@@ -5638,7 +5746,7 @@ TEST(DebugEventContext) {
   expected_context.Clear();
   SetDebugEventListener(isolate, nullptr);
   expected_context_data = v8::Local<v8::Value>();
-  CheckDebuggerUnloaded(isolate);
+  CheckDebuggerUnloaded();
 }
 
 
@@ -5698,11 +5806,13 @@ TEST(DeoptimizeDuringDebugBreak) {
 
   // Compile and run function bar which will optimize it for some flag settings.
   v8::Local<v8::Function> f = CompileFunction(&env, "function bar(){}", "bar");
-  f->Call(context, v8::Undefined(env->GetIsolate()), 0, NULL).ToLocalChecked();
+  f->Call(context, v8::Undefined(env->GetIsolate()), 0, nullptr)
+      .ToLocalChecked();
 
   // Set debug break and call bar again.
   v8::debug::DebugBreak(env->GetIsolate());
-  f->Call(context, v8::Undefined(env->GetIsolate()), 0, NULL).ToLocalChecked();
+  f->Call(context, v8::Undefined(env->GetIsolate()), 0, nullptr)
+      .ToLocalChecked();
 
   CHECK(debug_event_break_deoptimize_done);
 
@@ -5823,7 +5933,7 @@ static void TestDebugBreakInLoop(const char* loop_head,
   // Receive 10 breaks for each test and then terminate JavaScript execution.
   static const int kBreaksPerTest = 10;
 
-  for (int i = 0; loop_bodies[i] != NULL; i++) {
+  for (int i = 0; loop_bodies[i] != nullptr; i++) {
     // Perform a lazy deoptimization after various numbers of breaks
     // have been hit.
 
@@ -5858,15 +5968,13 @@ static void TestDebugBreakInLoop(const char* loop_head,
   }
 }
 
-
 static const char* loop_bodies_1[] = {"",
                                       "g()",
                                       "if (a == 0) { g() }",
                                       "if (a == 1) { g() }",
                                       "if (a == 0) { g() } else { h() }",
                                       "if (a == 0) { continue }",
-                                      NULL};
-
+                                      nullptr};
 
 static const char* loop_bodies_2[] = {
     "if (a == 1) { continue }",
@@ -5874,8 +5982,7 @@ static const char* loop_bodies_2[] = {
     "switch (a) { case 1: continue; }",
     "switch (a) { case 1: g(); break; default: h() }",
     "switch (a) { case 1: continue; break; default: h() }",
-    NULL};
-
+    nullptr};
 
 void DebugBreakLoop(const char* loop_header, const char** loop_bodies,
                     const char* loop_footer) {
@@ -5894,7 +6001,7 @@ void DebugBreakLoop(const char* loop_header, const char** loop_bodies,
 
   // Get rid of the debug event listener.
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -6065,11 +6172,11 @@ TEST(Regress131642) {
 // Import from test-heap.cc
 namespace v8 {
 namespace internal {
-
+namespace heap {
 int CountNativeContexts();
-}
-}
-
+}  // namespace heap
+}  // namespace internal
+}  // namespace v8
 
 static void NopListener(const v8::Debug::EventDetails& event_details) {
 }
@@ -6078,15 +6185,15 @@ static void NopListener(const v8::Debug::EventDetails& event_details) {
 TEST(DebuggerCreatesContextIffActive) {
   DebugLocalContext env;
   v8::HandleScope scope(env->GetIsolate());
-  CHECK_EQ(1, v8::internal::CountNativeContexts());
+  CHECK_EQ(1, v8::internal::heap::CountNativeContexts());
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
   CompileRun("debugger;");
-  CHECK_EQ(1, v8::internal::CountNativeContexts());
+  CHECK_EQ(1, v8::internal::heap::CountNativeContexts());
 
   SetDebugEventListener(env->GetIsolate(), NopListener);
   CompileRun("debugger;");
-  CHECK_EQ(2, v8::internal::CountNativeContexts());
+  CHECK_EQ(2, v8::internal::heap::CountNativeContexts());
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
 }
@@ -6137,11 +6244,11 @@ TEST(PrecompiledFunction) {
       "bar();                          \n";
   v8::Local<v8::Value> result = ParserCacheCompileRun(source);
   CHECK(result->IsString());
-  v8::String::Utf8Value utf8(result);
+  v8::String::Utf8Value utf8(env->GetIsolate(), result);
   CHECK_EQ(0, strcmp("bar", *utf8));
 
   SetDebugEventListener(env->GetIsolate(), nullptr);
-  CheckDebuggerUnloaded(env->GetIsolate());
+  CheckDebuggerUnloaded();
 }
 
 
@@ -6371,7 +6478,7 @@ static void NoInterruptsOnDebugEvent(
   if (event_details.GetEvent() != v8::AfterCompile) return;
   ++after_compile_handler_depth;
   // Do not allow nested AfterCompile events.
-  CHECK(after_compile_handler_depth <= 1);
+  CHECK_LE(after_compile_handler_depth, 1);
   v8::Isolate* isolate = event_details.GetEventContext()->GetIsolate();
   v8::Isolate::AllowJavascriptExecutionScope allow_script(isolate);
   isolate->RequestInterrupt(&HandleInterrupt, nullptr);
@@ -6406,26 +6513,25 @@ TEST(BreakLocationIterator) {
   CHECK(i_isolate->debug()->EnsureBreakInfo(shared));
 
   Handle<i::DebugInfo> debug_info(shared->GetDebugInfo());
-  Handle<i::AbstractCode> abstract_code(shared->abstract_code());
 
   {
-    auto iterator = i::BreakIterator::GetIterator(debug_info, abstract_code);
-    CHECK(iterator->GetBreakLocation().IsDebuggerStatement());
-    CHECK_EQ(17, iterator->GetBreakLocation().position());
-    iterator->Next();
-    CHECK(iterator->GetBreakLocation().IsDebugBreakSlot());
-    CHECK_EQ(32, iterator->GetBreakLocation().position());
-    iterator->Next();
-    CHECK(iterator->GetBreakLocation().IsCall());
-    CHECK_EQ(32, iterator->GetBreakLocation().position());
-    iterator->Next();
-    CHECK(iterator->GetBreakLocation().IsDebuggerStatement());
-    CHECK_EQ(47, iterator->GetBreakLocation().position());
-    iterator->Next();
-    CHECK(iterator->GetBreakLocation().IsReturn());
-    CHECK_EQ(60, iterator->GetBreakLocation().position());
-    iterator->Next();
-    CHECK(iterator->Done());
+    i::BreakIterator iterator(debug_info);
+    CHECK(iterator.GetBreakLocation().IsDebuggerStatement());
+    CHECK_EQ(17, iterator.GetBreakLocation().position());
+    iterator.Next();
+    CHECK(iterator.GetBreakLocation().IsDebugBreakSlot());
+    CHECK_EQ(32, iterator.GetBreakLocation().position());
+    iterator.Next();
+    CHECK(iterator.GetBreakLocation().IsCall());
+    CHECK_EQ(32, iterator.GetBreakLocation().position());
+    iterator.Next();
+    CHECK(iterator.GetBreakLocation().IsDebuggerStatement());
+    CHECK_EQ(47, iterator.GetBreakLocation().position());
+    iterator.Next();
+    CHECK(iterator.GetBreakLocation().IsReturn());
+    CHECK_EQ(60, iterator.GetBreakLocation().position());
+    iterator.Next();
+    CHECK(iterator.Done());
   }
 
   DisableDebugger(isolate);
@@ -6536,23 +6642,117 @@ TEST(DebugCoverage) {
   CHECK_EQ(2, function_data.Count());
 }
 
+namespace {
+v8::debug::Coverage::ScriptData GetScriptDataAndDeleteCoverage(
+    v8::Isolate* isolate) {
+  v8::debug::Coverage coverage = v8::debug::Coverage::CollectPrecise(isolate);
+  CHECK_EQ(1u, coverage.ScriptCount());
+  return coverage.GetScriptData(0);
+}
+}  // namespace
+
+TEST(DebugCoverageWithCoverageOutOfScope) {
+  i::FLAG_always_opt = false;
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
+  v8::debug::Coverage::SelectMode(isolate, v8::debug::Coverage::kPreciseCount);
+  v8::Local<v8::String> source = v8_str(
+      "function f() {\n"
+      "}\n"
+      "f();\n"
+      "f();");
+  CompileRun(source);
+  v8::debug::Coverage::ScriptData script_data =
+      GetScriptDataAndDeleteCoverage(isolate);
+  v8::Local<v8::debug::Script> script = script_data.GetScript();
+  CHECK(script->Source()
+            .ToLocalChecked()
+            ->Equals(env.local(), source)
+            .FromMaybe(false));
+
+  CHECK_EQ(2u, script_data.FunctionCount());
+  v8::debug::Coverage::FunctionData function_data =
+      script_data.GetFunctionData(0);
+
+  CHECK_EQ(0, function_data.StartOffset());
+  CHECK_EQ(26, function_data.EndOffset());
+
+  v8::debug::Location start =
+      script->GetSourceLocation(function_data.StartOffset());
+  v8::debug::Location end =
+      script->GetSourceLocation(function_data.EndOffset());
+  CHECK_EQ(0, start.GetLineNumber());
+  CHECK_EQ(0, start.GetColumnNumber());
+  CHECK_EQ(3, end.GetLineNumber());
+  CHECK_EQ(4, end.GetColumnNumber());
+  CHECK_EQ(1, function_data.Count());
+
+  function_data = script_data.GetFunctionData(1);
+  start = script->GetSourceLocation(function_data.StartOffset());
+  end = script->GetSourceLocation(function_data.EndOffset());
+
+  CHECK_EQ(0, function_data.StartOffset());
+  CHECK_EQ(16, function_data.EndOffset());
+
+  CHECK_EQ(0, start.GetLineNumber());
+  CHECK_EQ(0, start.GetColumnNumber());
+  CHECK_EQ(1, end.GetLineNumber());
+  CHECK_EQ(1, end.GetColumnNumber());
+  CHECK_EQ(2, function_data.Count());
+}
+
+namespace {
+v8::debug::Coverage::FunctionData GetFunctionDataAndDeleteCoverage(
+    v8::Isolate* isolate) {
+  v8::debug::Coverage coverage = v8::debug::Coverage::CollectPrecise(isolate);
+  CHECK_EQ(1u, coverage.ScriptCount());
+
+  v8::debug::Coverage::ScriptData script_data = coverage.GetScriptData(0);
+
+  CHECK_EQ(2u, script_data.FunctionCount());
+  v8::debug::Coverage::FunctionData function_data =
+      script_data.GetFunctionData(0);
+  CHECK_EQ(1, function_data.Count());
+  CHECK_EQ(0, function_data.StartOffset());
+  CHECK_EQ(26, function_data.EndOffset());
+  return function_data;
+}
+}  // namespace
+
+TEST(DebugCoverageWithScriptDataOutOfScope) {
+  i::FLAG_always_opt = false;
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
+  v8::debug::Coverage::SelectMode(isolate, v8::debug::Coverage::kPreciseCount);
+  v8::Local<v8::String> source = v8_str(
+      "function f() {\n"
+      "}\n"
+      "f();\n"
+      "f();");
+  CompileRun(source);
+
+  v8::debug::Coverage::FunctionData function_data =
+      GetFunctionDataAndDeleteCoverage(isolate);
+  CHECK_EQ(1, function_data.Count());
+  CHECK_EQ(0, function_data.StartOffset());
+  CHECK_EQ(26, function_data.EndOffset());
+}
+
 TEST(BuiltinsExceptionPrediction) {
   v8::Isolate* isolate = CcTest::isolate();
+  i::Isolate* iisolate = CcTest::i_isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Context::New(isolate);
 
-  // TODO(gsathya): Fix catch prediction for the following.
-  std::set<int> whitelist(
-      {i::Builtins::kPromiseThenFinally, i::Builtins::kPromiseCatchFinally});
+  i::Snapshot::EnsureAllBuiltinsAreDeserialized(iisolate);
 
-  i::Builtins* builtins = CcTest::i_isolate()->builtins();
+  i::Builtins* builtins = iisolate->builtins();
   bool fail = false;
   for (int i = 0; i < i::Builtins::builtin_count; i++) {
-    Code* builtin = builtins->builtin(static_cast<i::Builtins::Name>(i));
-
+    Code* builtin = builtins->builtin(i);
     if (builtin->kind() != Code::BUILTIN) continue;
-    if (whitelist.find(i) != whitelist.end()) continue;
-
     auto prediction = builtin->GetBuiltinCatchPrediction();
     USE(prediction);
   }
@@ -6573,7 +6773,7 @@ TEST(DebugGetPossibleBreakpointsReturnLocations) {
   CompileRun(source);
   v8::PersistentValueVector<v8::debug::Script> scripts(isolate);
   v8::debug::GetLoadedScripts(isolate, scripts);
-  CHECK(scripts.Size() == 1);
+  CHECK_EQ(scripts.Size(), 1);
   std::vector<v8::debug::BreakLocation> locations;
   CHECK(scripts.Get(0)->GetPossibleBreakpoints(
       v8::debug::Location(0, 17), v8::debug::Location(), true, &locations));
@@ -6583,33 +6783,29 @@ TEST(DebugGetPossibleBreakpointsReturnLocations) {
       ++returns_count;
     }
   }
-  if (i::FLAG_stress_fullcodegen) {
-    // With fullcodegen we generate one return location.
-    CHECK(returns_count == 1);
-  } else {
-    // With Ignition we generate one return location per return statement,
-    // each has line = 5, column = 0 as statement position.
-    CHECK(returns_count == 4);
-  }
+  // With Ignition we generate one return location per return statement,
+  // each has line = 5, column = 0 as statement position.
+  CHECK_EQ(returns_count, 4);
 }
 
 TEST(DebugEvaluateNoSideEffect) {
   LocalContext env;
+  v8::HandleScope scope(env->GetIsolate());
+  EnableDebugger(env->GetIsolate());
   i::Isolate* isolate = CcTest::i_isolate();
-  i::HandleScope scope(isolate);
-  i::List<i::Handle<i::JSFunction>> list;
+  std::vector<i::Handle<i::JSFunction>> all_functions;
   {
     i::HeapIterator iterator(isolate->heap());
     while (i::HeapObject* obj = iterator.next()) {
       if (!obj->IsJSFunction()) continue;
       i::JSFunction* fun = i::JSFunction::cast(obj);
-      list.Add(i::Handle<i::JSFunction>(fun));
+      all_functions.emplace_back(fun);
     }
   }
 
   // Perform side effect check on all built-in functions. The side effect check
   // itself contains additional sanity checks.
-  for (i::Handle<i::JSFunction> fun : list) {
+  for (i::Handle<i::JSFunction> fun : all_functions) {
     bool failed = false;
     {
       i::NoSideEffectScope scope(isolate, true);
@@ -6617,4 +6813,5 @@ TEST(DebugEvaluateNoSideEffect) {
     }
     if (failed) isolate->clear_pending_exception();
   }
+  DisableDebugger(env->GetIsolate());
 }

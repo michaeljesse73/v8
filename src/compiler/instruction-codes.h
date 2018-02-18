@@ -45,15 +45,19 @@ enum class RecordWriteMode { kValueIsMap, kValueIsPointer, kValueIsAny };
   V(ArchTailCallCodeObjectFromJSFunction) \
   V(ArchTailCallCodeObject)               \
   V(ArchCallJSFunction)                   \
-  V(ArchTailCallJSFunctionFromJSFunction) \
   V(ArchTailCallAddress)                  \
   V(ArchPrepareCallCFunction)             \
+  V(ArchSaveCallerRegisters)              \
+  V(ArchRestoreCallerRegisters)           \
   V(ArchCallCFunction)                    \
   V(ArchPrepareTailCall)                  \
+  V(ArchCallWasmFunction)                 \
+  V(ArchTailCallWasm)                     \
   V(ArchJmp)                              \
   V(ArchLookupSwitch)                     \
   V(ArchTableSwitch)                      \
   V(ArchNop)                              \
+  V(ArchDebugAbort)                       \
   V(ArchDebugBreak)                       \
   V(ArchComment)                          \
   V(ArchThrowTerminator)                  \
@@ -64,20 +68,6 @@ enum class RecordWriteMode { kValueIsMap, kValueIsPointer, kValueIsAny };
   V(ArchParentFramePointer)               \
   V(ArchTruncateDoubleToI)                \
   V(ArchStoreWithWriteBarrier)            \
-  V(CheckedLoadInt8)                      \
-  V(CheckedLoadUint8)                     \
-  V(CheckedLoadInt16)                     \
-  V(CheckedLoadUint16)                    \
-  V(CheckedLoadWord32)                    \
-  V(CheckedLoadWord64)                    \
-  V(CheckedLoadFloat32)                   \
-  V(CheckedLoadFloat64)                   \
-  V(CheckedStoreWord8)                    \
-  V(CheckedStoreWord16)                   \
-  V(CheckedStoreWord32)                   \
-  V(CheckedStoreWord64)                   \
-  V(CheckedStoreFloat32)                  \
-  V(CheckedStoreFloat64)                  \
   V(ArchStackSlot)                        \
   V(AtomicLoadInt8)                       \
   V(AtomicLoadUint8)                      \
@@ -184,9 +174,11 @@ V8_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os,
 enum FlagsMode {
   kFlags_none = 0,
   kFlags_branch = 1,
-  kFlags_deoptimize = 2,
-  kFlags_set = 3,
-  kFlags_trap = 4
+  kFlags_branch_and_poison = 2,
+  kFlags_deoptimize = 3,
+  kFlags_deoptimize_and_poison = 4,
+  kFlags_set = 5,
+  kFlags_trap = 6
 };
 
 V8_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os,
@@ -228,6 +220,12 @@ FlagsCondition CommuteFlagsCondition(FlagsCondition condition);
 
 V8_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os,
                                            const FlagsCondition& fc);
+
+enum MemoryAccessMode {
+  kMemoryAccessDirect = 0,
+  kMemoryAccessProtected = 1,
+  kMemoryAccessPoisoned = 2
+};
 
 // The InstructionCode is an opaque, target-specific integer that encodes
 // what code to emit for an instruction in the code generator. It is not

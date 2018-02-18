@@ -63,12 +63,6 @@ std::ostream& operator<<(std::ostream& os, FrameStateType type) {
     case FrameStateType::kJavaScriptBuiltinContinuation:
       os << "JAVA_SCRIPT_BUILTIN_CONTINUATION_FRAME";
       break;
-    case FrameStateType::kGetterStub:
-      os << "GETTER_STUB";
-      break;
-    case FrameStateType::kSetterStub:
-      os << "SETTER_STUB";
-      break;
   }
   return os;
 }
@@ -121,12 +115,10 @@ Node* CreateBuiltinContinuationFrameStateCommon(
 }
 }  // namespace
 
-Node* CreateStubBuiltinContinuationFrameState(JSGraph* js_graph,
-                                              Builtins::Name name,
-                                              Node* context, Node** parameters,
-                                              int parameter_count,
-                                              Node* outer_frame_state,
-                                              ContinuationFrameStateMode mode) {
+Node* CreateStubBuiltinContinuationFrameState(
+    JSGraph* js_graph, Builtins::Name name, Node* context,
+    Node* const* parameters, int parameter_count, Node* outer_frame_state,
+    ContinuationFrameStateMode mode) {
   Isolate* isolate = js_graph->isolate();
   Callable callable = Builtins::CallableFor(isolate, name);
   CallInterfaceDescriptor descriptor = callable.descriptor();
@@ -155,7 +147,7 @@ Node* CreateStubBuiltinContinuationFrameState(JSGraph* js_graph,
 
 Node* CreateJavaScriptBuiltinContinuationFrameState(
     JSGraph* js_graph, Handle<JSFunction> function, Builtins::Name name,
-    Node* target, Node* context, Node** stack_parameters,
+    Node* target, Node* context, Node* const* stack_parameters,
     int stack_parameter_count, Node* outer_frame_state,
     ContinuationFrameStateMode mode) {
   Isolate* isolate = js_graph->isolate();
@@ -166,10 +158,9 @@ Node* CreateJavaScriptBuiltinContinuationFrameState(
   // the deoptimizer and not explicitly specified in the frame state. Check that
   // there is not a mismatch between the number of frame state parameters and
   // the stack parameters required by the builtin taking this into account.
-  DCHECK_EQ(
-      Builtins::GetStackParameterCount(isolate, name) + 1,  // add receiver
-      stack_parameter_count +
-          (mode == ContinuationFrameStateMode::EAGER ? 0 : 1));
+  DCHECK_EQ(Builtins::GetStackParameterCount(name) + 1,  // add receiver
+            stack_parameter_count +
+                (mode == ContinuationFrameStateMode::EAGER ? 0 : 1));
 
   Node* argc =
       js_graph->Constant(stack_parameter_count -
