@@ -495,6 +495,12 @@ class TurboAssembler : public Assembler {
 
   DEFINE_INSTRUCTION(Slt);
   DEFINE_INSTRUCTION(Sltu);
+  DEFINE_INSTRUCTION(Sle);
+  DEFINE_INSTRUCTION(Sleu);
+  DEFINE_INSTRUCTION(Sgt);
+  DEFINE_INSTRUCTION(Sgtu);
+  DEFINE_INSTRUCTION(Sge);
+  DEFINE_INSTRUCTION(Sgeu);
 
   // MIPS32 R2 instruction macro.
   DEFINE_INSTRUCTION(Ror);
@@ -603,7 +609,16 @@ class TurboAssembler : public Assembler {
   void Movt(Register rd, Register rs, uint16_t cc = 0);
   void Movf(Register rd, Register rs, uint16_t cc = 0);
 
+  void LoadZeroIfConditionNotZero(Register dest, Register condition);
+  void LoadZeroIfConditionZero(Register dest, Register condition);
+  void LoadZeroOnCondition(Register rd, Register rs, const Operand& rt,
+                           Condition cond);
+
   void Clz(Register rd, Register rs);
+  void Ctz(Register rd, Register rs);
+  void Dctz(Register rd, Register rs);
+  void Popcnt(Register rd, Register rs);
+  void Dpopcnt(Register rd, Register rs);
 
   // MIPS64 R2 instruction macro.
   void Ext(Register rt, Register rs, uint16_t pos, uint16_t size);
@@ -747,62 +762,22 @@ class TurboAssembler : public Assembler {
     }
   }
 
-  void Move(FPURegister dst, float imm);
-  void Move(FPURegister dst, double imm);
+  void Move(FPURegister dst, float imm) { Move(dst, bit_cast<uint32_t>(imm)); }
+  void Move(FPURegister dst, double imm) { Move(dst, bit_cast<uint64_t>(imm)); }
+  void Move(FPURegister dst, uint32_t src);
+  void Move(FPURegister dst, uint64_t src);
 
-  inline void MulBranchOvf(Register dst, Register left, const Operand& right,
-                           Label* overflow_label, Register scratch = at) {
-    MulBranchOvf(dst, left, right, overflow_label, nullptr, scratch);
-  }
-
-  inline void MulBranchNoOvf(Register dst, Register left, const Operand& right,
-                             Label* no_overflow_label, Register scratch = at) {
-    MulBranchOvf(dst, left, right, nullptr, no_overflow_label, scratch);
-  }
-
-  void MulBranchOvf(Register dst, Register left, const Operand& right,
-                    Label* overflow_label, Label* no_overflow_label,
-                    Register scratch = at);
-
-  void MulBranchOvf(Register dst, Register left, Register right,
-                    Label* overflow_label, Label* no_overflow_label,
-                    Register scratch = at);
-
-  inline void DaddBranchOvf(Register dst, Register left, const Operand& right,
-                            Label* overflow_label, Register scratch = at) {
-    DaddBranchOvf(dst, left, right, overflow_label, nullptr, scratch);
-  }
-
-  inline void DaddBranchNoOvf(Register dst, Register left, const Operand& right,
-                              Label* no_overflow_label, Register scratch = at) {
-    DaddBranchOvf(dst, left, right, nullptr, no_overflow_label, scratch);
-  }
-
-  void DaddBranchOvf(Register dst, Register left, const Operand& right,
-                     Label* overflow_label, Label* no_overflow_label,
-                     Register scratch = at);
-
-  void DaddBranchOvf(Register dst, Register left, Register right,
-                     Label* overflow_label, Label* no_overflow_label,
-                     Register scratch = at);
-
-  inline void DsubBranchOvf(Register dst, Register left, const Operand& right,
-                            Label* overflow_label, Register scratch = at) {
-    DsubBranchOvf(dst, left, right, overflow_label, nullptr, scratch);
-  }
-
-  inline void DsubBranchNoOvf(Register dst, Register left, const Operand& right,
-                              Label* no_overflow_label, Register scratch = at) {
-    DsubBranchOvf(dst, left, right, nullptr, no_overflow_label, scratch);
-  }
-
-  void DsubBranchOvf(Register dst, Register left, const Operand& right,
-                     Label* overflow_label, Label* no_overflow_label,
-                     Register scratch = at);
-
-  void DsubBranchOvf(Register dst, Register left, Register right,
-                     Label* overflow_label, Label* no_overflow_label,
-                     Register scratch = at);
+  // DaddOverflow sets overflow register to a negative value if
+  // overflow occured, otherwise it is zero or positive
+  void DaddOverflow(Register dst, Register left, const Operand& right,
+                    Register overflow);
+  // DsubOverflow sets overflow register to a negative value if
+  // overflow occured, otherwise it is zero or positive
+  void DsubOverflow(Register dst, Register left, const Operand& right,
+                    Register overflow);
+  // MulOverflow sets overflow register to zero if no overflow occured
+  void MulOverflow(Register dst, Register left, const Operand& right,
+                   Register overflow);
 
 // Number of instructions needed for calculation of switch table entry address
 #ifdef _MIPS_ARCH_MIPS64R6
@@ -1162,7 +1137,11 @@ const Operand& rt = Operand(zero_reg), BranchDelaySlot bd = PROTECT
                                bool builtin_exit_frame = false);
 
   // Generates a trampoline to jump to the off-heap instruction stream.
-  void JumpToInstructionStream(const InstructionStream* stream);
+  void JumpToInstructionStream(Address entry);
+
+  // ---------------------------------------------------------------------------
+  // In-place weak references.
+  void LoadWeakValue(Register out, Register in, Label* target_if_cleared);
 
   // -------------------------------------------------------------------------
   // StatsCounter support.
@@ -1226,6 +1205,9 @@ const Operand& rt = Operand(zero_reg), BranchDelaySlot bd = PROTECT
 
   // Abort execution if argument is not a FixedArray, enabled via --debug-code.
   void AssertFixedArray(Register object);
+
+  // Abort execution if argument is not a Constructor, enabled via --debug-code.
+  void AssertConstructor(Register object);
 
   // Abort execution if argument is not a JSFunction, enabled via --debug-code.
   void AssertFunction(Register object);

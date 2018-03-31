@@ -80,9 +80,7 @@ void MacroAssembler::CompareRoot(Register with, Heap::RootListIndex index) {
   }
 }
 
-
-void MacroAssembler::CompareRoot(const Operand& with,
-                                 Heap::RootListIndex index) {
+void MacroAssembler::CompareRoot(Operand with, Heap::RootListIndex index) {
   DCHECK(isolate()->heap()->RootCanBeTreatedAsConstant(index));
   Handle<Object> object = isolate()->heap()->root_handle(index);
   if (object->IsHeapObject()) {
@@ -184,36 +182,21 @@ void TurboAssembler::SlowTruncateToIDelayed(Zone* zone, Register result_reg) {
 }
 
 void MacroAssembler::DoubleToI(Register result_reg, XMMRegister input_reg,
-                               XMMRegister scratch,
-                               MinusZeroMode minus_zero_mode,
-                               Label* lost_precision, Label* is_nan,
-                               Label* minus_zero, Label::Distance dst) {
+                               XMMRegister scratch, Label* lost_precision,
+                               Label* is_nan, Label::Distance dst) {
   DCHECK(input_reg != scratch);
   cvttsd2si(result_reg, Operand(input_reg));
   Cvtsi2sd(scratch, Operand(result_reg));
   ucomisd(scratch, input_reg);
   j(not_equal, lost_precision, dst);
   j(parity_even, is_nan, dst);
-  if (minus_zero_mode == FAIL_ON_MINUS_ZERO) {
-    Label done;
-    // The integer converted back is equal to the original. We
-    // only have to test if we got -0 as an input.
-    test(result_reg, Operand(result_reg));
-    j(not_zero, &done, Label::kNear);
-    movmskpd(result_reg, input_reg);
-    // Bit 0 contains the sign of the double in input_reg.
-    // If input was positive, we are ok and return 0, otherwise
-    // jump to minus_zero.
-    and_(result_reg, 1);
-    j(not_zero, minus_zero, dst);
-    bind(&done);
-  }
 }
 
-void TurboAssembler::LoadUint32(XMMRegister dst, const Operand& src) {
+void TurboAssembler::LoadUint32(XMMRegister dst, Operand src) {
   Label done;
   cmp(src, Immediate(0));
-  ExternalReference uint32_bias = ExternalReference::address_of_uint32_bias();
+  ExternalReference uint32_bias =
+      ExternalReference::address_of_uint32_bias(isolate());
   Cvtsi2sd(dst, src);
   j(not_sign, &done, Label::kNear);
   addsd(dst, Operand::StaticVariable(uint32_bias));
@@ -386,7 +369,7 @@ void MacroAssembler::MaybeDropFrames() {
     RelocInfo::CODE_TARGET);
 }
 
-void TurboAssembler::Cvtsi2sd(XMMRegister dst, const Operand& src) {
+void TurboAssembler::Cvtsi2sd(XMMRegister dst, Operand src) {
   xorps(dst, dst);
   cvtsi2sd(dst, src);
 }
@@ -505,6 +488,19 @@ void MacroAssembler::AssertFixedArray(Register object) {
   }
 }
 
+void MacroAssembler::AssertConstructor(Register object) {
+  if (emit_debug_code()) {
+    test(object, Immediate(kSmiTagMask));
+    Check(not_equal, AbortReason::kOperandIsASmiAndNotAConstructor);
+    Push(object);
+    mov(object, FieldOperand(object, HeapObject::kMapOffset));
+    test_b(FieldOperand(object, Map::kBitFieldOffset),
+           Immediate(Map::IsConstructorBit::kMask));
+    Pop(object);
+    Check(not_zero, AbortReason::kOperandIsNotAConstructor);
+  }
+}
+
 void MacroAssembler::AssertFunction(Register object) {
   if (emit_debug_code()) {
     test(object, Immediate(kSmiTagMask));
@@ -596,10 +592,11 @@ void TurboAssembler::EnterFrame(StackFrame::Type type) {
   push(Immediate(StackFrame::TypeToMarker(type)));
   if (type == StackFrame::INTERNAL) {
     push(Immediate(CodeObject()));
-  }
-  if (emit_debug_code()) {
-    cmp(Operand(esp, 0), Immediate(isolate()->factory()->undefined_value()));
-    Check(not_equal, AbortReason::kCodeObjectNotProperlyPatched);
+    // Check at runtime that this code object was patched correctly.
+    if (emit_debug_code()) {
+      cmp(Operand(esp, 0), Immediate(isolate()->factory()->undefined_value()));
+      Check(not_equal, AbortReason::kCodeObjectNotProperlyPatched);
+    }
   }
 }
 
@@ -863,9 +860,8 @@ void MacroAssembler::JumpToExternalReference(const ExternalReference& ext,
   jmp(ces.GetCode(), RelocInfo::CODE_TARGET);
 }
 
-void MacroAssembler::JumpToInstructionStream(const InstructionStream* stream) {
-  Address bytes_address = reinterpret_cast<Address>(stream->bytes());
-  mov(kOffHeapTrampolineRegister, Immediate(bytes_address, RelocInfo::NONE));
+void MacroAssembler::JumpToInstructionStream(Address entry) {
+  mov(kOffHeapTrampolineRegister, Immediate(entry, RelocInfo::OFF_HEAP_TARGET));
   jmp(kOffHeapTrampolineRegister);
 }
 
@@ -1008,27 +1004,13 @@ void MacroAssembler::InvokePrologue(const ParameterCount& expected,
 void MacroAssembler::CheckDebugHook(Register fun, Register new_target,
                                     const ParameterCount& expected,
                                     const ParameterCount& actual) {
-  Label skip_hook, call_hook;
-
-  ExternalReference debug_is_active =
-      ExternalReference::debug_is_active_address(isolate());
-  cmpb(Operand::StaticVariable(debug_is_active), Immediate(0));
-  j(equal, &skip_hook);
+  Label skip_hook;
 
   ExternalReference debug_hook_active =
       ExternalReference::debug_hook_on_function_call_address(isolate());
   cmpb(Operand::StaticVariable(debug_hook_active), Immediate(0));
-  j(not_equal, &call_hook);
+  j(equal, &skip_hook);
 
-  Register scratch = ecx;
-  mov(scratch, FieldOperand(fun, JSFunction::kSharedFunctionInfoOffset));
-  mov(scratch, FieldOperand(scratch, SharedFunctionInfo::kDebugInfoOffset));
-  JumpIfSmi(scratch, &skip_hook);
-  mov(scratch, FieldOperand(scratch, DebugInfo::kFlagsOffset));
-  test(scratch, Immediate(Smi::FromInt(DebugInfo::kBreakAtEntry)));
-  j(zero, &skip_hook);
-
-  bind(&call_hook);
   {
     FrameScope frame(this,
                      has_frame() ? StackFrame::NONE : StackFrame::INTERNAL);
@@ -1182,9 +1164,7 @@ void TurboAssembler::Move(Register dst, const Immediate& x) {
   }
 }
 
-void TurboAssembler::Move(const Operand& dst, const Immediate& x) {
-  mov(dst, x);
-}
+void TurboAssembler::Move(Operand dst, const Immediate& x) { mov(dst, x); }
 
 void TurboAssembler::Move(Register dst, Handle<HeapObject> object) {
   mov(dst, object);
@@ -1253,8 +1233,7 @@ void TurboAssembler::Move(XMMRegister dst, uint64_t src) {
   }
 }
 
-void TurboAssembler::Pshuflw(XMMRegister dst, const Operand& src,
-                             uint8_t shuffle) {
+void TurboAssembler::Pshuflw(XMMRegister dst, Operand src, uint8_t shuffle) {
   if (CpuFeatures::IsSupported(AVX)) {
     CpuFeatureScope scope(this, AVX);
     vpshuflw(dst, src, shuffle);
@@ -1263,8 +1242,7 @@ void TurboAssembler::Pshuflw(XMMRegister dst, const Operand& src,
   }
 }
 
-void TurboAssembler::Pshufd(XMMRegister dst, const Operand& src,
-                            uint8_t shuffle) {
+void TurboAssembler::Pshufd(XMMRegister dst, Operand src, uint8_t shuffle) {
   if (CpuFeatures::IsSupported(AVX)) {
     CpuFeatureScope scope(this, AVX);
     vpshufd(dst, src, shuffle);
@@ -1273,7 +1251,7 @@ void TurboAssembler::Pshufd(XMMRegister dst, const Operand& src,
   }
 }
 
-void TurboAssembler::Psignb(XMMRegister dst, const Operand& src) {
+void TurboAssembler::Psignb(XMMRegister dst, Operand src) {
   if (CpuFeatures::IsSupported(AVX)) {
     CpuFeatureScope scope(this, AVX);
     vpsignb(dst, dst, src);
@@ -1287,7 +1265,7 @@ void TurboAssembler::Psignb(XMMRegister dst, const Operand& src) {
   UNREACHABLE();
 }
 
-void TurboAssembler::Psignw(XMMRegister dst, const Operand& src) {
+void TurboAssembler::Psignw(XMMRegister dst, Operand src) {
   if (CpuFeatures::IsSupported(AVX)) {
     CpuFeatureScope scope(this, AVX);
     vpsignw(dst, dst, src);
@@ -1301,7 +1279,7 @@ void TurboAssembler::Psignw(XMMRegister dst, const Operand& src) {
   UNREACHABLE();
 }
 
-void TurboAssembler::Psignd(XMMRegister dst, const Operand& src) {
+void TurboAssembler::Psignd(XMMRegister dst, Operand src) {
   if (CpuFeatures::IsSupported(AVX)) {
     CpuFeatureScope scope(this, AVX);
     vpsignd(dst, dst, src);
@@ -1315,7 +1293,7 @@ void TurboAssembler::Psignd(XMMRegister dst, const Operand& src) {
   UNREACHABLE();
 }
 
-void TurboAssembler::Pshufb(XMMRegister dst, const Operand& src) {
+void TurboAssembler::Pshufb(XMMRegister dst, Operand src) {
   if (CpuFeatures::IsSupported(AVX)) {
     CpuFeatureScope scope(this, AVX);
     vpshufb(dst, dst, src);
@@ -1377,7 +1355,7 @@ void TurboAssembler::Pextrd(Register dst, XMMRegister src, int8_t imm8) {
   movd(dst, xmm0);
 }
 
-void TurboAssembler::Pinsrd(XMMRegister dst, const Operand& src, int8_t imm8,
+void TurboAssembler::Pinsrd(XMMRegister dst, Operand src, int8_t imm8,
                             bool is_64_bits) {
   if (CpuFeatures::IsSupported(SSE4_1)) {
     CpuFeatureScope sse_scope(this, SSE4_1);
@@ -1405,7 +1383,7 @@ void TurboAssembler::Pinsrd(XMMRegister dst, const Operand& src, int8_t imm8,
   }
 }
 
-void TurboAssembler::Lzcnt(Register dst, const Operand& src) {
+void TurboAssembler::Lzcnt(Register dst, Operand src) {
   if (CpuFeatures::IsSupported(LZCNT)) {
     CpuFeatureScope scope(this, LZCNT);
     lzcnt(dst, src);
@@ -1419,7 +1397,7 @@ void TurboAssembler::Lzcnt(Register dst, const Operand& src) {
   xor_(dst, Immediate(31));  // for x in [0..31], 31^x == 31-x.
 }
 
-void TurboAssembler::Tzcnt(Register dst, const Operand& src) {
+void TurboAssembler::Tzcnt(Register dst, Operand src) {
   if (CpuFeatures::IsSupported(BMI1)) {
     CpuFeatureScope scope(this, BMI1);
     tzcnt(dst, src);
@@ -1432,7 +1410,7 @@ void TurboAssembler::Tzcnt(Register dst, const Operand& src) {
   bind(&not_zero_src);
 }
 
-void TurboAssembler::Popcnt(Register dst, const Operand& src) {
+void TurboAssembler::Popcnt(Register dst, Operand src) {
   if (CpuFeatures::IsSupported(POPCNT)) {
     CpuFeatureScope scope(this, POPCNT);
     popcnt(dst, src);
@@ -1441,6 +1419,12 @@ void TurboAssembler::Popcnt(Register dst, const Operand& src) {
   UNREACHABLE();
 }
 
+void MacroAssembler::LoadWeakValue(Register in_out, Label* target_if_cleared) {
+  cmp(in_out, Immediate(kClearedWeakHeapObject));
+  j(equal, target_if_cleared);
+
+  and_(in_out, Immediate(~kWeakHeapObjectMask));
+}
 
 void MacroAssembler::IncrementCounter(StatsCounter* counter, int value) {
   DCHECK_GT(value, 0);
@@ -1680,7 +1664,9 @@ void TurboAssembler::ComputeCodeStartAddress(Register dst) {
   }
 }
 
-void TurboAssembler::ResetSpeculationPoisonRegister() { UNREACHABLE(); }
+void TurboAssembler::ResetSpeculationPoisonRegister() {
+  mov(kSpeculationPoisonRegister, Immediate(-1));
+}
 
 }  // namespace internal
 }  // namespace v8

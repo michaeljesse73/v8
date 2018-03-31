@@ -37,6 +37,10 @@ class ProfilerListener : public CodeEventListener {
   void CodeCreateEvent(CodeEventListener::LogEventsAndTags tag,
                        AbstractCode* code, SharedFunctionInfo* shared,
                        Name* script_name, int line, int column) override;
+  void CodeCreateEvent(CodeEventListener::LogEventsAndTags tag,
+                       const wasm::WasmCode* code,
+                       wasm::WasmName name) override;
+
   void CodeMovingGCEvent() override {}
   void CodeMoveEvent(AbstractCode* from, Address to) override;
   void CodeDisableOptEvent(AbstractCode* code,
@@ -45,9 +49,6 @@ class ProfilerListener : public CodeEventListener {
                       int fp_to_sp_delta) override;
   void GetterCallbackEvent(Name* name, Address entry_point) override;
   void RegExpCodeCreateEvent(AbstractCode* code, String* source) override;
-  void InstructionStreamCreateEvent(CodeEventListener::LogEventsAndTags tag,
-                                    const InstructionStream* stream,
-                                    const char* description) override;
   void SetterCallbackEvent(Name* name, Address entry_point) override;
   void SharedFunctionInfoMoveEvent(Address from, Address to) override {}
 

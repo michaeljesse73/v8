@@ -241,25 +241,22 @@ class Debug {
 
   // Break point handling.
   bool SetBreakPoint(Handle<JSFunction> function,
-                     Handle<Object> break_point_object,
-                     int* source_position);
-  bool SetBreakPointForScript(Handle<Script> script,
-                              Handle<Object> break_point_object,
-                              int* source_position);
-  void ClearBreakPoint(Handle<Object> break_point_object);
+                     Handle<BreakPoint> break_point, int* source_position);
+  void ClearBreakPoint(Handle<BreakPoint> break_point);
   void ChangeBreakOnException(ExceptionBreakType type, bool enable);
   bool IsBreakOnException(ExceptionBreakType type);
 
-  bool SetBreakpoint(Handle<Script> script, Handle<String> condition,
-                     int* offset, int* id);
+  bool SetBreakPointForScript(Handle<Script> script, Handle<String> condition,
+                              int* source_position, int* id);
+  bool SetBreakpointForFunction(Handle<JSFunction> function,
+                                Handle<String> condition, int* id);
   void RemoveBreakpoint(int id);
 
-  // The parameter is either a BreakPointInfo object, or a FixedArray of
-  // BreakPointInfo objects.
-  // Returns an empty handle if no breakpoint is hit, or a FixedArray with all
-  // hit breakpoints.
-  MaybeHandle<FixedArray> GetHitBreakPointObjects(
-      Handle<Object> break_point_objects);
+  // Find breakpoints from the debug info and the break location and check
+  // whether they are hit. Return an empty handle if not, or a FixedArray with
+  // hit BreakPoint objects.
+  MaybeHandle<FixedArray> GetHitBreakPoints(Handle<DebugInfo> debug_info,
+                                            int position);
 
   // Stepping handling.
   void PrepareStep(StepAction step_action);
@@ -271,6 +268,7 @@ class Debug {
 
   void DeoptimizeFunction(Handle<SharedFunctionInfo> shared);
   void PrepareFunctionForBreakPoints(Handle<SharedFunctionInfo> shared);
+  void InstallDebugBreakTrampoline();
   bool GetPossibleBreakpoints(Handle<Script> script, int start_position,
                               int end_position, bool restrict_to_function,
                               std::vector<BreakLocation>* locations);
@@ -339,7 +337,7 @@ class Debug {
   }
 
   bool PerformSideEffectCheck(Handle<JSFunction> function);
-  bool PerformSideEffectCheckForCallback(Address function);
+  bool PerformSideEffectCheckForCallback(Object* callback_info);
 
   // Flags and states.
   DebugScope* debugger_entry() {
@@ -358,6 +356,10 @@ class Debug {
   inline bool in_debug_scope() const {
     return !!base::Relaxed_Load(&thread_local_.current_debug_scope_);
   }
+  inline bool needs_check_on_function_call() const {
+    return hook_on_function_call_;
+  }
+
   void set_break_points_active(bool v) { break_points_active_ = v; }
   bool break_points_active() const { return break_points_active_; }
 
@@ -433,8 +435,6 @@ class Debug {
 
   // Constructors for debug event objects.
   MUST_USE_RESULT MaybeHandle<Object> MakeExecutionState();
-  MUST_USE_RESULT MaybeHandle<Object> MakeBreakEvent(
-      Handle<Object> break_points_hit);
   MUST_USE_RESULT MaybeHandle<Object> MakeExceptionEvent(
       Handle<Object> exception,
       bool uncaught,
@@ -468,7 +468,9 @@ class Debug {
                                            BreakLocation* location,
                                            bool* has_break_points = nullptr);
   bool IsMutedAtCurrentLocation(JavaScriptFrame* frame);
-  bool CheckBreakPoint(Handle<Object> break_point_object);
+  // Check whether a BreakPoint object is hit. Evaluate condition depending
+  // on whether this is a regular break location or a break at function entry.
+  bool CheckBreakPoint(Handle<BreakPoint> break_point, bool is_break_at_entry);
   MaybeHandle<Object> CallFunction(const char* name, int argc,
                                    Handle<Object> args[],
                                    bool catch_exceptions = true);
@@ -600,7 +602,6 @@ class LegacyDebugDelegate : public v8::debug::DebugDelegate {
                       bool has_compile_error) override;
   void BreakProgramRequested(v8::Local<v8::Context> paused_context,
                              v8::Local<v8::Object> exec_state,
-                             v8::Local<v8::Value> break_points_hit,
                              const std::vector<debug::BreakpointId>&) override;
   void ExceptionThrown(v8::Local<v8::Context> paused_context,
                        v8::Local<v8::Object> exec_state,
@@ -620,20 +621,6 @@ class LegacyDebugDelegate : public v8::debug::DebugDelegate {
   virtual void ProcessDebugEvent(v8::DebugEvent event,
                                  Handle<JSObject> event_data,
                                  Handle<JSObject> exec_state) = 0;
-};
-
-class JavaScriptDebugDelegate : public LegacyDebugDelegate {
- public:
-  JavaScriptDebugDelegate(Isolate* isolate, Handle<JSFunction> listener,
-                          Handle<Object> data);
-  virtual ~JavaScriptDebugDelegate();
-
- private:
-  void ProcessDebugEvent(v8::DebugEvent event, Handle<JSObject> event_data,
-                         Handle<JSObject> exec_state) override;
-
-  Handle<JSFunction> listener_;
-  Handle<Object> data_;
 };
 
 class NativeDebugDelegate : public LegacyDebugDelegate {
@@ -713,9 +700,9 @@ class ReturnValueScope {
 // Stack allocated class for disabling break.
 class DisableBreak BASE_EMBEDDED {
  public:
-  explicit DisableBreak(Debug* debug)
+  explicit DisableBreak(Debug* debug, bool disable = true)
       : debug_(debug), previous_break_disabled_(debug->break_disabled_) {
-    debug_->break_disabled_ = true;
+    debug_->break_disabled_ = disable;
   }
   ~DisableBreak() {
     debug_->break_disabled_ = previous_break_disabled_;
@@ -745,10 +732,10 @@ class SuppressDebug BASE_EMBEDDED {
 class NoSideEffectScope {
  public:
   NoSideEffectScope(Isolate* isolate, bool disallow_side_effects)
-      : isolate_(isolate),
-        old_needs_side_effect_check_(isolate->needs_side_effect_check()) {
-    isolate->set_needs_side_effect_check(old_needs_side_effect_check_ ||
-                                         disallow_side_effects);
+      : isolate_(isolate) {
+    // NoSideEffectScope is not re-entrant if already enabled.
+    CHECK(!isolate->needs_side_effect_check());
+    isolate->set_needs_side_effect_check(disallow_side_effects);
     isolate->debug()->UpdateHookOnFunctionCall();
     isolate->debug()->side_effect_check_failed_ = false;
   }
@@ -756,7 +743,6 @@ class NoSideEffectScope {
 
  private:
   Isolate* isolate_;
-  bool old_needs_side_effect_check_;
   DISALLOW_COPY_AND_ASSIGN(NoSideEffectScope);
 };
 
@@ -774,6 +760,9 @@ class DebugCodegen : public AllStatic {
   // Builtin to atomically (wrt deopts) handle debugger statement and
   // drop frames to restart function if necessary.
   static void GenerateHandleDebuggerStatement(MacroAssembler* masm);
+
+  // Builtin to trigger a debug break before entering the function.
+  static void GenerateDebugBreakTrampoline(MacroAssembler* masm);
 };
 
 

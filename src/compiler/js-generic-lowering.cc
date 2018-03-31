@@ -14,6 +14,8 @@
 #include "src/compiler/node-matchers.h"
 #include "src/compiler/node-properties.h"
 #include "src/compiler/operator-properties.h"
+#include "src/feedback-vector.h"
+#include "src/objects/scope-info.h"
 
 namespace v8 {
 namespace internal {
@@ -85,7 +87,9 @@ REPLACE_STUB_CALL(ToName)
 REPLACE_STUB_CALL(ToObject)
 REPLACE_STUB_CALL(ToString)
 REPLACE_STUB_CALL(ForInEnumerate)
+REPLACE_STUB_CALL(FulfillPromise)
 REPLACE_STUB_CALL(PerformPromiseThen)
+REPLACE_STUB_CALL(PromiseResolve)
 REPLACE_STUB_CALL(RejectPromise)
 REPLACE_STUB_CALL(ResolvePromise)
 #undef REPLACE_STUB_CALL
@@ -277,6 +281,16 @@ void JSGenericLowering::LowerJSStoreDataPropertyInLiteral(Node* node) {
   ReplaceWithRuntimeCall(node, Runtime::kDefineDataPropertyInLiteral);
 }
 
+void JSGenericLowering::LowerJSStoreInArrayLiteral(Node* node) {
+  Callable callable =
+      Builtins::CallableFor(isolate(), Builtins::kStoreInArrayLiteralIC);
+  CallDescriptor::Flags flags = FrameStateFlagForCall(node);
+  FeedbackParameter const& p = FeedbackParameterOf(node->op());
+  node->InsertInput(zone(), 3, jsgraph()->SmiConstant(p.feedback().index()));
+  node->InsertInput(zone(), 4, jsgraph()->HeapConstant(p.feedback().vector()));
+  ReplaceWithStubCall(node, callable, flags);
+}
+
 void JSGenericLowering::LowerJSDeleteProperty(Node* node) {
   CallDescriptor::Flags flags = FrameStateFlagForCall(node);
   Callable callable =
@@ -363,32 +377,29 @@ void JSGenericLowering::LowerJSCreateArray(Node* node) {
   NodeProperties::ChangeOp(node, common()->Call(call_descriptor));
 }
 
+void JSGenericLowering::LowerJSCreateArrayIterator(Node* node) {
+  UNREACHABLE();  // Eliminated in typed lowering.
+}
+
 void JSGenericLowering::LowerJSCreateBoundFunction(Node* node) {
   UNREACHABLE();  // Eliminated in typed lowering.
 }
 
 void JSGenericLowering::LowerJSCreateClosure(Node* node) {
   CreateClosureParameters const& p = CreateClosureParametersOf(node->op());
-  CallDescriptor::Flags flags = FrameStateFlagForCall(node);
   Handle<SharedFunctionInfo> const shared_info = p.shared_info();
   node->InsertInput(zone(), 0, jsgraph()->HeapConstant(shared_info));
-  node->RemoveInput(3);  // control
+  node->InsertInput(zone(), 1, jsgraph()->HeapConstant(p.feedback_cell()));
+  node->RemoveInput(4);  // control
 
   // Use the FastNewClosure builtin only for functions allocated in new space.
   if (p.pretenure() == NOT_TENURED) {
     Callable callable =
         Builtins::CallableFor(isolate(), Builtins::kFastNewClosure);
-    node->InsertInput(zone(), 1,
-                      jsgraph()->HeapConstant(p.feedback().vector()));
-    node->InsertInput(zone(), 2, jsgraph()->SmiConstant(p.feedback().index()));
+    CallDescriptor::Flags flags = FrameStateFlagForCall(node);
     ReplaceWithStubCall(node, callable, flags);
   } else {
-    node->InsertInput(zone(), 1,
-                      jsgraph()->HeapConstant(p.feedback().vector()));
-    node->InsertInput(zone(), 2, jsgraph()->SmiConstant(p.feedback().index()));
-    ReplaceWithRuntimeCall(node, (p.pretenure() == TENURED)
-                                     ? Runtime::kNewClosure_Tenured
-                                     : Runtime::kNewClosure);
+    ReplaceWithRuntimeCall(node, Runtime::kNewClosure_Tenured);
   }
 }
 
@@ -423,12 +434,23 @@ void JSGenericLowering::LowerJSCreateIterResultObject(Node* node) {
   UNREACHABLE();  // Eliminated in typed lowering.
 }
 
+void JSGenericLowering::LowerJSCreateStringIterator(Node* node) {
+  UNREACHABLE();  // Eliminated in typed lowering.
+}
+
 void JSGenericLowering::LowerJSCreateKeyValueArray(Node* node) {
   UNREACHABLE();  // Eliminated in typed lowering.
 }
 
 void JSGenericLowering::LowerJSCreatePromise(Node* node) {
   UNREACHABLE();  // Eliminated in typed lowering.
+}
+
+void JSGenericLowering::LowerJSCreateTypedArray(Node* node) {
+  CallDescriptor::Flags flags = FrameStateFlagForCall(node);
+  Callable callable =
+      Builtins::CallableFor(isolate(), Builtins::kCreateTypedArray);
+  ReplaceWithStubCall(node, callable, flags);
 }
 
 void JSGenericLowering::LowerJSCreateLiteralArray(Node* node) {
@@ -509,7 +531,7 @@ void JSGenericLowering::LowerJSCreateWithContext(Node* node) {
 }
 
 void JSGenericLowering::LowerJSCreateBlockContext(Node* node) {
-  Handle<ScopeInfo> scope_info = OpParameter<Handle<ScopeInfo>>(node);
+  Handle<ScopeInfo> scope_info = ScopeInfoOf(node->op());
   node->InsertInput(zone(), 0, jsgraph()->HeapConstant(scope_info));
   ReplaceWithRuntimeCall(node, Runtime::kPushBlockContext);
 }

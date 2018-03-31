@@ -59,7 +59,7 @@ ObjectDeserializer::DeserializeWasmCompiledModule(
   if (!d.Deserialize(isolate).ToHandle(&result))
     return MaybeHandle<WasmCompiledModule>();
 
-  if (!result->IsFixedArray()) return MaybeHandle<WasmCompiledModule>();
+  if (!result->IsWasmCompiledModule()) return MaybeHandle<WasmCompiledModule>();
 
   // Cast without type checks, as the module wrapper is not there yet.
   return handle(static_cast<WasmCompiledModule*>(*result), isolate);
@@ -102,9 +102,10 @@ void ObjectDeserializer::CommitPostProcessedObjects() {
   StringTable::EnsureCapacityForDeserialization(
       isolate(), static_cast<int>(new_internalized_strings().size()));
   for (Handle<String> string : new_internalized_strings()) {
+    DisallowHeapAllocation no_gc;
     StringTableInsertionKey key(*string);
     DCHECK_NULL(StringTable::ForwardStringIfExists(isolate(), &key, *string));
-    StringTable::LookupKey(isolate(), &key);
+    StringTable::AddKeyNoResize(isolate(), &key);
   }
 
   Heap* heap = isolate()->heap();
@@ -113,7 +114,8 @@ void ObjectDeserializer::CommitPostProcessedObjects() {
     // Assign a new script id to avoid collision.
     script->set_id(isolate()->heap()->NextScriptId());
     // Add script to list.
-    Handle<Object> list = WeakFixedArray::Add(factory->script_list(), script);
+    Handle<Object> list =
+        FixedArrayOfWeakCells::Add(factory->script_list(), script);
     heap->SetRootScriptList(*list);
   }
 }

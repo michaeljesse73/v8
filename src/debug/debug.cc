@@ -10,9 +10,9 @@
 #include "src/arguments.h"
 #include "src/assembler-inl.h"
 #include "src/bootstrapper.h"
+#include "src/builtins/builtins.h"
 #include "src/code-stubs.h"
 #include "src/compilation-cache.h"
-#include "src/compiler-dispatcher/optimizing-compile-dispatcher.h"
 #include "src/compiler.h"
 #include "src/debug/debug-evaluate.h"
 #include "src/debug/liveedit.h"
@@ -28,6 +28,7 @@
 #include "src/messages.h"
 #include "src/objects/debug-objects-inl.h"
 #include "src/snapshot/natives.h"
+#include "src/snapshot/snapshot.h"
 #include "src/wasm/wasm-objects-inl.h"
 
 namespace v8 {
@@ -153,7 +154,7 @@ BreakIterator::BreakIterator(Handle<DebugInfo> debug_info)
       break_index_(-1),
       source_position_iterator_(
           debug_info->DebugBytecodeArray()->SourcePositionTable()) {
-  position_ = debug_info->shared()->start_position();
+  position_ = debug_info->shared()->StartPosition();
   statement_position_ = position_;
   // There is at least one break location.
   DCHECK(!Done());
@@ -375,6 +376,9 @@ bool Debug::Load() {
   if (context.is_null()) return false;
 
   debug_context_ = isolate_->global_handles()->Create(*context);
+  GlobalHandles::AnnotateStrongRetainer(
+      Handle<Object>::cast(debug_context_).location(),
+      "v8::internal::Debug::debug_context_");
 
   feature_tracker()->Track(DebugFeatureTracker::kActive);
 
@@ -511,9 +515,7 @@ MaybeHandle<FixedArray> Debug::CheckBreakPoints(Handle<DebugInfo> debug_info,
   if (has_break_points) *has_break_points = has_break_points_to_check;
   if (!has_break_points_to_check) return {};
 
-  Handle<Object> break_point_objects =
-      debug_info->GetBreakPointObjects(location->position());
-  return Debug::GetHitBreakPointObjects(break_point_objects);
+  return Debug::GetHitBreakPoints(debug_info, location->position());
 }
 
 
@@ -568,58 +570,44 @@ MaybeHandle<Object> Debug::CallFunction(const char* name, int argc,
 
 
 // Check whether a single break point object is triggered.
-bool Debug::CheckBreakPoint(Handle<Object> break_point_object) {
-  Factory* factory = isolate_->factory();
+bool Debug::CheckBreakPoint(Handle<BreakPoint> break_point,
+                            bool is_break_at_entry) {
   HandleScope scope(isolate_);
 
-  // TODO(kozyatinskiy): replace this if by DCHEK once the JS debug API has been
-  // removed.
-  if (break_point_object->IsBreakPoint()) {
-    Handle<BreakPoint> break_point =
-        Handle<BreakPoint>::cast(break_point_object);
-    if (!break_point->condition()->length()) return true;
-    Handle<String> condition(break_point->condition());
-    Handle<Object> result;
+  if (!break_point->condition()->length()) return true;
+  Handle<String> condition(break_point->condition());
+  MaybeHandle<Object> maybe_result;
+  Handle<Object> result;
+
+  if (is_break_at_entry) {
+    maybe_result = DebugEvaluate::WithTopmostArguments(isolate_, condition);
+  } else {
     // Since we call CheckBreakpoint only for deoptimized frame on top of stack,
     // we can use 0 as index of inlined frame.
-    if (!DebugEvaluate::Local(isolate_, break_frame_id(),
-                              /* inlined_jsframe_index */ 0, condition, false)
-             .ToHandle(&result)) {
-      if (isolate_->has_pending_exception()) {
-        isolate_->clear_pending_exception();
-      }
-      return false;
-    }
-    return result->BooleanValue();
+    const int inlined_jsframe_index = 0;
+    const bool throw_on_side_effect = false;
+    maybe_result =
+        DebugEvaluate::Local(isolate_, break_frame_id(), inlined_jsframe_index,
+                             condition, throw_on_side_effect);
   }
 
-  // Ignore check if break point object is not a JSObject.
-  if (!break_point_object->IsJSObject()) return true;
-
-  // Get the break id as an object.
-  Handle<Object> break_id = factory->NewNumberFromInt(Debug::break_id());
-
-  // Call IsBreakPointTriggered.
-  Handle<Object> argv[] = { break_id, break_point_object };
-  Handle<Object> result;
-  if (!CallFunction("IsBreakPointTriggered", arraysize(argv), argv)
-           .ToHandle(&result)) {
+  if (!maybe_result.ToHandle(&result)) {
+    if (isolate_->has_pending_exception()) {
+      isolate_->clear_pending_exception();
+    }
     return false;
   }
-
-  // Return whether the break point is triggered.
-  return result->IsTrue(isolate_);
+  return result->BooleanValue();
 }
 
-
 bool Debug::SetBreakPoint(Handle<JSFunction> function,
-                          Handle<Object> break_point_object,
+                          Handle<BreakPoint> break_point,
                           int* source_position) {
   HandleScope scope(isolate_);
 
   // Make sure the function is compiled and has set up the debug info.
   Handle<SharedFunctionInfo> shared(function->shared());
-  if (!EnsureBreakInfo(shared)) return true;
+  if (!EnsureBreakInfo(shared)) return false;
   PrepareFunctionForBreakPoints(shared);
   Handle<DebugInfo> debug_info(shared->GetDebugInfo());
   // Source positions starts with zero.
@@ -627,7 +615,7 @@ bool Debug::SetBreakPoint(Handle<JSFunction> function,
 
   // Find the break point and change it.
   *source_position = FindBreakablePosition(debug_info, *source_position);
-  DebugInfo::SetBreakPoint(debug_info, *source_position, break_point_object);
+  DebugInfo::SetBreakPoint(debug_info, *source_position, break_point);
   // At least one active break point now.
   DCHECK_LT(0, debug_info->GetBreakPointCount());
 
@@ -639,13 +627,16 @@ bool Debug::SetBreakPoint(Handle<JSFunction> function,
 }
 
 bool Debug::SetBreakPointForScript(Handle<Script> script,
-                                   Handle<Object> break_point_object,
-                                   int* source_position) {
+                                   Handle<String> condition,
+                                   int* source_position, int* id) {
+  *id = ++thread_local_.last_breakpoint_id_;
+  Handle<BreakPoint> break_point =
+      isolate_->factory()->NewBreakPoint(*id, condition);
   if (script->type() == Script::TYPE_WASM) {
     Handle<WasmCompiledModule> compiled_module(
         WasmCompiledModule::cast(script->wasm_compiled_module()), isolate_);
     return WasmCompiledModule::SetBreakPoint(compiled_module, source_position,
-                                             break_point_object);
+                                             break_point);
   }
 
   HandleScope scope(isolate_);
@@ -662,8 +653,8 @@ bool Debug::SetBreakPointForScript(Handle<Script> script,
 
   // Find position within function. The script position might be before the
   // source position of the first function.
-  if (shared->start_position() > *source_position) {
-    *source_position = shared->start_position();
+  if (shared->StartPosition() > *source_position) {
+    *source_position = shared->StartPosition();
   }
 
   Handle<DebugInfo> debug_info(shared->GetDebugInfo());
@@ -675,7 +666,7 @@ bool Debug::SetBreakPointForScript(Handle<Script> script,
   if (breakable_position < *source_position) return false;
   *source_position = breakable_position;
 
-  DebugInfo::SetBreakPoint(debug_info, *source_position, break_point_object);
+  DebugInfo::SetBreakPoint(debug_info, *source_position, break_point);
   // At least one active break point now.
   DCHECK_LT(0, debug_info->GetBreakPointCount());
 
@@ -732,16 +723,16 @@ void Debug::ClearBreakPoints(Handle<DebugInfo> debug_info) {
   }
 }
 
-void Debug::ClearBreakPoint(Handle<Object> break_point_object) {
+void Debug::ClearBreakPoint(Handle<BreakPoint> break_point) {
   HandleScope scope(isolate_);
 
   for (DebugInfoListNode* node = debug_info_list_; node != nullptr;
        node = node->next()) {
     Handle<Object> result =
-        DebugInfo::FindBreakPointInfo(node->debug_info(), break_point_object);
+        DebugInfo::FindBreakPointInfo(node->debug_info(), break_point);
     if (result->IsUndefined(isolate_)) continue;
     Handle<DebugInfo> debug_info = node->debug_info();
-    if (DebugInfo::ClearBreakPoint(debug_info, break_point_object)) {
+    if (DebugInfo::ClearBreakPoint(debug_info, break_point)) {
       ClearBreakPoints(debug_info);
       if (debug_info->GetBreakPointCount() == 0) {
         RemoveBreakInfoAndMaybeFree(debug_info);
@@ -753,12 +744,13 @@ void Debug::ClearBreakPoint(Handle<Object> break_point_object) {
   }
 }
 
-bool Debug::SetBreakpoint(Handle<Script> script, Handle<String> condition,
-                          int* offset, int* id) {
+bool Debug::SetBreakpointForFunction(Handle<JSFunction> function,
+                                     Handle<String> condition, int* id) {
   *id = ++thread_local_.last_breakpoint_id_;
   Handle<BreakPoint> breakpoint =
       isolate_->factory()->NewBreakPoint(*id, condition);
-  return SetBreakPointForScript(script, breakpoint, offset);
+  int source_position = 0;
+  return SetBreakPoint(function, breakpoint, &source_position);
 }
 
 void Debug::RemoveBreakpoint(int id) {
@@ -807,25 +799,31 @@ bool Debug::IsBreakOnException(ExceptionBreakType type) {
   }
 }
 
-MaybeHandle<FixedArray> Debug::GetHitBreakPointObjects(
-    Handle<Object> break_point_objects) {
-  DCHECK(!break_point_objects->IsUndefined(isolate_));
-  if (!break_point_objects->IsFixedArray()) {
-    if (!CheckBreakPoint(break_point_objects)) return {};
+MaybeHandle<FixedArray> Debug::GetHitBreakPoints(Handle<DebugInfo> debug_info,
+                                                 int position) {
+  Handle<Object> break_points = debug_info->GetBreakPoints(position);
+  bool is_break_at_entry = debug_info->BreakAtEntry();
+  DCHECK(!break_points->IsUndefined(isolate_));
+  if (!break_points->IsFixedArray()) {
+    if (!CheckBreakPoint(Handle<BreakPoint>::cast(break_points),
+                         is_break_at_entry)) {
+      return {};
+    }
     Handle<FixedArray> break_points_hit = isolate_->factory()->NewFixedArray(1);
-    break_points_hit->set(0, *break_point_objects);
+    break_points_hit->set(0, *break_points);
     return break_points_hit;
   }
 
-  Handle<FixedArray> array(FixedArray::cast(*break_point_objects));
+  Handle<FixedArray> array(FixedArray::cast(*break_points));
   int num_objects = array->length();
   Handle<FixedArray> break_points_hit =
       isolate_->factory()->NewFixedArray(num_objects);
   int break_points_hit_count = 0;
   for (int i = 0; i < num_objects; ++i) {
-    Handle<Object> break_point_object(array->get(i), isolate_);
-    if (CheckBreakPoint(break_point_object)) {
-      break_points_hit->set(break_points_hit_count++, *break_point_object);
+    Handle<Object> break_point(array->get(i), isolate_);
+    if (CheckBreakPoint(Handle<BreakPoint>::cast(break_point),
+                        is_break_at_entry)) {
+      break_points_hit->set(break_points_hit_count++, *break_point);
     }
   }
   if (break_points_hit_count == 0) return {};
@@ -902,11 +900,10 @@ void Debug::PrepareStepOnThrow() {
         if (summaries.size() > 1) {
           Handle<AbstractCode> code = summary.AsJavaScript().abstract_code();
           CHECK_EQ(AbstractCode::INTERPRETED_FUNCTION, code->kind());
-          BytecodeArray* bytecode = code->GetBytecodeArray();
-          HandlerTable* table = HandlerTable::cast(bytecode->handler_table());
+          HandlerTable table(code->GetBytecodeArray());
           int code_offset = summary.code_offset();
           HandlerTable::CatchPrediction prediction;
-          int index = table->LookupRange(code_offset, nullptr, &prediction);
+          int index = table.LookupRange(code_offset, nullptr, &prediction);
           if (index > 0) found_handler = true;
         } else {
           found_handler = true;
@@ -1140,10 +1137,7 @@ class RedirectActiveFunctions : public ThreadVisitor {
 void Debug::DeoptimizeFunction(Handle<SharedFunctionInfo> shared) {
   // Deoptimize all code compiled from this shared function info including
   // inlining.
-  if (isolate_->concurrent_recompilation_enabled()) {
-    isolate_->optimizing_compile_dispatcher()->Flush(
-        OptimizingCompileDispatcher::BlockingBehavior::kBlock);
-  }
+  isolate_->AbortConcurrentOptimization(BlockingBehavior::kBlock);
 
   // Make sure we abort incremental marking.
   isolate_->heap()->CollectAllGarbage(Heap::kMakeHeapIterableMask,
@@ -1177,6 +1171,7 @@ void Debug::PrepareFunctionForBreakPoints(Handle<SharedFunctionInfo> shared) {
   if (debug_info->CanBreakAtEntry()) {
     // Deopt everything in case the function is inlined anywhere.
     Deoptimizer::DeoptimizeAll(isolate_);
+    InstallDebugBreakTrampoline();
   } else {
     DeoptimizeFunction(shared);
     // Update PCs on the stack to point to recompiled code.
@@ -1187,6 +1182,57 @@ void Debug::PrepareFunctionForBreakPoints(Handle<SharedFunctionInfo> shared) {
 
   debug_info->set_flags(debug_info->flags() |
                         DebugInfo::kPreparedForBreakpoints);
+}
+
+void Debug::InstallDebugBreakTrampoline() {
+  // Check the list of debug infos whether the debug break trampoline needs to
+  // be installed. If that's the case, iterate the heap for functions to rewire
+  // to the trampoline.
+  HandleScope scope(isolate_);
+  // If there is a breakpoint at function entry, we need to install trampoline.
+  bool needs_to_use_trampoline = false;
+  // If there we break at entry to an api callback, we need to clear ICs.
+  bool needs_to_clear_ic = false;
+  for (DebugInfoListNode* current = debug_info_list_; current != nullptr;
+       current = current->next()) {
+    if (current->debug_info()->CanBreakAtEntry()) {
+      needs_to_use_trampoline = true;
+      if (current->debug_info()->shared()->IsApiFunction()) {
+        needs_to_clear_ic = true;
+        break;
+      }
+    }
+  }
+
+  if (!needs_to_use_trampoline) return;
+
+  Handle<Code> trampoline = BUILTIN_CODE(isolate_, DebugBreakTrampoline);
+  std::vector<Handle<JSFunction>> needs_compile;
+  {
+    HeapIterator iterator(isolate_->heap());
+    while (HeapObject* obj = iterator.next()) {
+      if (needs_to_clear_ic && obj->IsFeedbackVector()) {
+        FeedbackVector::cast(obj)->ClearSlots(isolate_);
+        continue;
+      } else if (obj->IsJSFunction()) {
+        JSFunction* fun = JSFunction::cast(obj);
+        SharedFunctionInfo* shared = fun->shared();
+        if (!shared->HasDebugInfo()) continue;
+        if (!shared->GetDebugInfo()->CanBreakAtEntry()) continue;
+        if (!fun->is_compiled()) {
+          needs_compile.push_back(handle(fun));
+        } else {
+          fun->set_code(*trampoline);
+        }
+      }
+    }
+  }
+  // By overwriting the function code with DebugBreakTrampoline, which tailcalls
+  // to shared code, we bypass CompileLazy. Perform CompileLazy here instead.
+  for (Handle<JSFunction> fun : needs_compile) {
+    Compiler::Compile(fun, Compiler::CLEAR_EXCEPTION);
+    fun->set_code(*trampoline);
+  }
 }
 
 namespace {
@@ -1234,8 +1280,8 @@ bool Debug::GetPossibleBreakpoints(Handle<Script> script, int start_position,
     SharedFunctionInfo::ScriptIterator iterator(script);
     for (SharedFunctionInfo* info = iterator.Next(); info != nullptr;
          info = iterator.Next()) {
-      if (info->end_position() < start_position ||
-          info->start_position() >= end_position) {
+      if (info->EndPosition() < start_position ||
+          info->StartPosition() >= end_position) {
         continue;
       }
       if (!info->IsSubjectToDebugging()) continue;
@@ -1281,15 +1327,15 @@ class SharedFunctionInfoFinder {
     if (!shared->IsSubjectToDebugging()) return;
     int start_position = shared->function_token_position();
     if (start_position == kNoSourcePosition) {
-      start_position = shared->start_position();
+      start_position = shared->StartPosition();
     }
 
     if (start_position > target_position_) return;
-    if (target_position_ > shared->end_position()) return;
+    if (target_position_ > shared->EndPosition()) return;
 
     if (current_candidate_ != nullptr) {
       if (current_start_position_ == start_position &&
-          shared->end_position() == current_candidate_->end_position()) {
+          shared->EndPosition() == current_candidate_->EndPosition()) {
         // If we already have a matching closure, do not throw it away.
         if (current_candidate_closure_ != nullptr && closure == nullptr) return;
         // If a top-level function contains only one function
@@ -1297,7 +1343,7 @@ class SharedFunctionInfoFinder {
         // is the same. In that case prefer the non top-level function.
         if (!current_candidate_->is_toplevel() && shared->is_toplevel()) return;
       } else if (start_position < current_start_position_ ||
-                 current_candidate_->end_position() < shared->end_position()) {
+                 current_candidate_->EndPosition() < shared->EndPosition()) {
         return;
       }
     }
@@ -1378,6 +1424,10 @@ bool Debug::EnsureBreakInfo(Handle<SharedFunctionInfo> shared) {
   if (!shared->is_compiled() &&
       !Compiler::Compile(shared, Compiler::CLEAR_EXCEPTION)) {
     return false;
+  }
+  if (shared->GetCode() ==
+      isolate_->builtins()->builtin(Builtins::kDeserializeLazy)) {
+    Snapshot::EnsureBuiltinIsDeserialized(isolate_, shared);
   }
   CreateBreakInfo(shared);
   return true;
@@ -1545,11 +1595,11 @@ Handle<FixedArray> Debug::GetLoadedScripts() {
   isolate_->heap()->CollectAllGarbage(Heap::kFinalizeIncrementalMarkingMask,
                                       GarbageCollectionReason::kDebugger);
   Factory* factory = isolate_->factory();
-  if (!factory->script_list()->IsWeakFixedArray()) {
+  if (!factory->script_list()->IsFixedArrayOfWeakCells()) {
     return factory->empty_fixed_array();
   }
-  Handle<WeakFixedArray> array =
-      Handle<WeakFixedArray>::cast(factory->script_list());
+  Handle<FixedArrayOfWeakCells> array =
+      Handle<FixedArrayOfWeakCells>::cast(factory->script_list());
   Handle<FixedArray> results = factory->NewFixedArray(array->Length());
   int length = 0;
   {
@@ -1568,14 +1618,6 @@ MaybeHandle<Object> Debug::MakeExecutionState() {
   // Create the execution state object.
   Handle<Object> argv[] = { isolate_->factory()->NewNumberFromInt(break_id()) };
   return CallFunction("MakeExecutionState", arraysize(argv), argv);
-}
-
-
-MaybeHandle<Object> Debug::MakeBreakEvent(Handle<Object> break_points_hit) {
-  // Create the new break event object.
-  Handle<Object> argv[] = { isolate_->factory()->NewNumberFromInt(break_id()),
-                            break_points_hit };
-  return CallFunction("MakeBreakEvent", arraysize(argv), argv);
 }
 
 
@@ -1754,29 +1796,15 @@ void Debug::OnDebugBreak(Handle<FixedArray> break_points_hit) {
   int inspector_break_points_count = 0;
   // This array contains breakpoints installed using JS debug API.
   for (int i = 0; i < break_points_hit->length(); ++i) {
-    Object* break_point = break_points_hit->get(i);
-    if (break_point->IsBreakPoint()) {
-      inspector_break_points_hit.push_back(BreakPoint::cast(break_point)->id());
-      ++inspector_break_points_count;
-    } else {
-      break_points_hit->set(i - inspector_break_points_count, break_point);
-    }
-  }
-  int break_points_length =
-      break_points_hit->length() - inspector_break_points_count;
-  Handle<Object> break_points;
-  if (break_points_length) {
-    break_points_hit->Shrink(break_points_length);
-    break_points = isolate_->factory()->NewJSArrayWithElements(
-        break_points_hit, PACKED_ELEMENTS, break_points_length);
-  } else {
-    break_points = isolate_->factory()->undefined_value();
+    BreakPoint* break_point = BreakPoint::cast(break_points_hit->get(i));
+    inspector_break_points_hit.push_back(break_point->id());
+    ++inspector_break_points_count;
   }
 
   debug_delegate_->BreakProgramRequested(
       GetDebugEventContext(isolate_),
       v8::Utils::ToLocal(Handle<JSObject>::cast(exec_state)),
-      v8::Utils::ToLocal(break_points), inspector_break_points_hit);
+      inspector_break_points_hit);
 }
 
 
@@ -1855,19 +1883,20 @@ void Debug::RunPromiseHook(PromiseHookType hook_type, Handle<JSPromise> promise,
           return;
         }
         last_frame_was_promise_builtin = false;
-        Handle<Code> code(info->code());
-        if (*code == *BUILTIN_CODE(isolate_, AsyncFunctionPromiseCreate)) {
-          type = debug::kDebugAsyncFunctionPromiseCreated;
-          last_frame_was_promise_builtin = true;
-        } else if (*code == *BUILTIN_CODE(isolate_, PromisePrototypeThen)) {
-          type = debug::kDebugPromiseThen;
-          last_frame_was_promise_builtin = true;
-        } else if (*code == *BUILTIN_CODE(isolate_, PromisePrototypeCatch)) {
-          type = debug::kDebugPromiseCatch;
-          last_frame_was_promise_builtin = true;
-        } else if (*code == *BUILTIN_CODE(isolate_, PromisePrototypeFinally)) {
-          type = debug::kDebugPromiseFinally;
-          last_frame_was_promise_builtin = true;
+        if (info->HasBuiltinId()) {
+          if (info->builtin_id() == Builtins::kAsyncFunctionPromiseCreate) {
+            type = debug::kDebugAsyncFunctionPromiseCreated;
+            last_frame_was_promise_builtin = true;
+          } else if (info->builtin_id() == Builtins::kPromisePrototypeThen) {
+            type = debug::kDebugPromiseThen;
+            last_frame_was_promise_builtin = true;
+          } else if (info->builtin_id() == Builtins::kPromisePrototypeCatch) {
+            type = debug::kDebugPromiseCatch;
+            last_frame_was_promise_builtin = true;
+          } else if (info->builtin_id() == Builtins::kPromisePrototypeFinally) {
+            type = debug::kDebugPromiseFinally;
+            last_frame_was_promise_builtin = true;
+          }
         }
       }
       it.Advance();
@@ -1917,9 +1946,8 @@ bool Debug::IsBlackboxed(Handle<SharedFunctionInfo> shared) {
       DCHECK(shared->script()->IsScript());
       Handle<Script> script(Script::cast(shared->script()));
       DCHECK(script->IsUserJavaScript());
-      debug::Location start =
-          GetDebugLocation(script, shared->start_position());
-      debug::Location end = GetDebugLocation(script, shared->end_position());
+      debug::Location start = GetDebugLocation(script, shared->StartPosition());
+      debug::Location end = GetDebugLocation(script, shared->EndPosition());
       is_blackboxed = debug_delegate_->IsFunctionBlackboxed(
           ToApiHandle<debug::Script>(script), start, end);
     }
@@ -1939,7 +1967,7 @@ bool Debug::AllFramesOnStackAreBlackboxed() {
 
 bool Debug::CanBreakAtEntry(Handle<SharedFunctionInfo> shared) {
   // Allow break at entry for builtin functions.
-  if (shared->native()) {
+  if (shared->native() || shared->IsApiFunction()) {
     // Functions that are subject to debugging can have regular breakpoints.
     DCHECK(!shared->IsSubjectToDebugging());
     return true;
@@ -2058,7 +2086,6 @@ void Debug::UpdateHookOnFunctionCall() {
   STATIC_ASSERT(LastStepAction == StepIn);
   hook_on_function_call_ = thread_local_.last_step_action_ == StepIn ||
                            isolate_->needs_side_effect_check();
-  DCHECK_IMPLIES(hook_on_function_call_, is_active_);
 }
 
 MaybeHandle<Object> Debug::Call(Handle<Object> fun, Handle<Object> data) {
@@ -2234,7 +2261,6 @@ bool Debug::PerformSideEffectCheck(Handle<JSFunction> function) {
       !Compiler::Compile(function, Compiler::KEEP_EXCEPTION)) {
     return false;
   }
-  Deoptimizer::DeoptimizeFunction(*function);
   if (!SharedFunctionInfo::HasNoSideEffect(handle(function->shared()))) {
     if (FLAG_trace_side_effect_free_debug_evaluate) {
       PrintF("[debug-evaluate] Function %s failed side effect check.\n",
@@ -2248,9 +2274,9 @@ bool Debug::PerformSideEffectCheck(Handle<JSFunction> function) {
   return true;
 }
 
-bool Debug::PerformSideEffectCheckForCallback(Address function) {
+bool Debug::PerformSideEffectCheckForCallback(Object* callback_info) {
   DCHECK(isolate_->needs_side_effect_check());
-  if (DebugEvaluate::CallbackHasNoSideEffect(function)) return true;
+  if (DebugEvaluate::CallbackHasNoSideEffect(callback_info)) return true;
   side_effect_check_failed_ = true;
   // Throw an uncatchable termination exception.
   isolate_->TerminateExecution();
@@ -2283,16 +2309,9 @@ void LegacyDebugDelegate::ScriptCompiled(v8::Local<v8::debug::Script> script,
 
 void LegacyDebugDelegate::BreakProgramRequested(
     v8::Local<v8::Context> paused_context, v8::Local<v8::Object> exec_state,
-    v8::Local<v8::Value> break_points_hit,
     const std::vector<debug::BreakpointId>&) {
-  Handle<Object> event_data;
-  if (isolate_->debug()
-          ->MakeBreakEvent(v8::Utils::OpenHandle(*break_points_hit))
-          .ToHandle(&event_data)) {
-    ProcessDebugEvent(
-        v8::Break, Handle<JSObject>::cast(event_data),
-        Handle<JSObject>::cast(v8::Utils::OpenHandle(*exec_state)));
-  }
+  ProcessDebugEvent(v8::Break, isolate_->factory()->NewJSObjectWithNullProto(),
+                    Handle<JSObject>::cast(v8::Utils::OpenHandle(*exec_state)));
 }
 
 void LegacyDebugDelegate::ExceptionThrown(v8::Local<v8::Context> paused_context,
@@ -2317,32 +2336,6 @@ void LegacyDebugDelegate::ProcessDebugEvent(v8::DebugEvent event,
   if (isolate_->debug()->MakeExecutionState().ToHandle(&exec_state)) {
     ProcessDebugEvent(event, event_data, Handle<JSObject>::cast(exec_state));
   }
-}
-
-JavaScriptDebugDelegate::JavaScriptDebugDelegate(Isolate* isolate,
-                                                 Handle<JSFunction> listener,
-                                                 Handle<Object> data)
-    : LegacyDebugDelegate(isolate) {
-  GlobalHandles* global_handles = isolate->global_handles();
-  listener_ = global_handles->Create(*listener);
-  data_ = global_handles->Create(*data);
-}
-
-JavaScriptDebugDelegate::~JavaScriptDebugDelegate() {
-  GlobalHandles::Destroy(Handle<Object>::cast(listener_).location());
-  GlobalHandles::Destroy(data_.location());
-}
-
-void JavaScriptDebugDelegate::ProcessDebugEvent(v8::DebugEvent event,
-                                                Handle<JSObject> event_data,
-                                                Handle<JSObject> exec_state) {
-  AllowJavascriptExecutionDebugOnly allow_script(isolate_);
-  Handle<Object> argv[] = {Handle<Object>(Smi::FromInt(event), isolate_),
-                           exec_state, event_data, data_};
-  Handle<JSReceiver> global = isolate_->global_proxy();
-  // Listener must not throw.
-  Execution::Call(isolate_, listener_, global, arraysize(argv), argv)
-      .ToHandleChecked();
 }
 
 NativeDebugDelegate::NativeDebugDelegate(Isolate* isolate,
@@ -2412,7 +2405,7 @@ NoSideEffectScope::~NoSideEffectScope() {
     isolate_->Throw(*isolate_->factory()->NewEvalError(
         MessageTemplate::kNoSideEffectDebugEvaluate));
   }
-  isolate_->set_needs_side_effect_check(old_needs_side_effect_check_);
+  isolate_->set_needs_side_effect_check(false);
   isolate_->debug()->UpdateHookOnFunctionCall();
   isolate_->debug()->side_effect_check_failed_ = false;
 }

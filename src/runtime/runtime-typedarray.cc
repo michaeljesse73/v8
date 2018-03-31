@@ -48,7 +48,7 @@ RUNTIME_FUNCTION(Runtime_TypedArrayCopyElements) {
   HandleScope scope(isolate);
   DCHECK_EQ(3, args.length());
   CONVERT_ARG_HANDLE_CHECKED(JSTypedArray, target, 0);
-  CONVERT_ARG_HANDLE_CHECKED(JSReceiver, source, 1);
+  CONVERT_ARG_HANDLE_CHECKED(Object, source, 1);
   CONVERT_NUMBER_ARG_HANDLE_CHECKED(length_obj, 2);
 
   size_t length;
@@ -190,22 +190,6 @@ RUNTIME_FUNCTION(Runtime_TypedArraySet) {
   Handle<JSReceiver> source = Handle<JSReceiver>::cast(obj);
   ElementsAccessor* accessor = target->GetElementsAccessor();
   return accessor->CopyElements(source, target, int_l, uint_offset);
-}
-
-// 22.2.3.4 %TypedArray%.prototype.slice ( start, end )
-RUNTIME_FUNCTION(Runtime_TypedArraySlice) {
-  HandleScope scope(isolate);
-  Handle<JSTypedArray> source = args.at<JSTypedArray>(0);
-  Handle<Smi> start = args.at<Smi>(1);
-  Handle<Smi> end = args.at<Smi>(2);
-  Handle<JSTypedArray> result = args.at<JSTypedArray>(3);
-
-  DCHECK(!source->WasNeutered());
-  DCHECK(!result->WasNeutered());
-  DCHECK_LE(start->value(), end->value());
-
-  ElementsAccessor* accessor = source->GetElementsAccessor();
-  return *accessor->Slice(source, start->value(), end->value(), result);
 }
 
 }  // namespace internal

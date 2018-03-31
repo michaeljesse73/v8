@@ -182,12 +182,12 @@ static void InitializeVM() {
                       v8::internal::CodeObjectRequired::kYes);   \
   RegisterDump core;
 
-#define RESET()                                                                \
-  __ Reset();                                                                  \
-  /* Reset the machine state (like simulator.ResetState()). */                 \
-  __ Msr(NZCV, xzr);                                                           \
+#define RESET()                                                \
+  MakeAssemblerBufferWritable(buf, allocated);                 \
+  __ Reset();                                                  \
+  /* Reset the machine state (like simulator.ResetState()). */ \
+  __ Msr(NZCV, xzr);                                           \
   __ Msr(FPCR, xzr);
-
 
 #define START_AFTER_RESET()                                                    \
   __ PushCalleeSavedRegisters();
@@ -11849,8 +11849,7 @@ TEST(system_msr) {
   TEARDOWN();
 }
 
-
-TEST(system_nop) {
+TEST(system) {
   INIT_V8();
   SETUP();
   RegisterDump before;
@@ -11858,6 +11857,7 @@ TEST(system_nop) {
   START();
   before.Dump(&masm);
   __ Nop();
+  __ Csdb();
   END();
 
   RUN();

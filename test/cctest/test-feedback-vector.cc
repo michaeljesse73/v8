@@ -95,7 +95,7 @@ TEST(VectorStructure) {
     CHECK_EQ(1,
              FeedbackMetadata::GetSlotSize(FeedbackSlotKind::kCreateClosure));
     FeedbackSlot slot = helper.slot(1);
-    Cell* cell = Cell::cast(vector->Get(slot));
+    FeedbackCell* cell = FeedbackCell::cast(vector->Get(slot));
     CHECK_EQ(cell->value(), *factory->undefined_value());
   }
 }
@@ -495,11 +495,10 @@ TEST(ReferenceContextAllocatesNoSlots) {
     Handle<FeedbackVector> feedback_vector =
         handle(f->feedback_vector(), isolate);
     FeedbackVectorHelper helper(feedback_vector);
-    CHECK_EQ(4, helper.slot_count());
+    CHECK_EQ(3, helper.slot_count());
     CHECK_SLOT_KIND(helper, 0, FeedbackSlotKind::kStoreGlobalSloppy);
     CHECK_SLOT_KIND(helper, 1, FeedbackSlotKind::kLoadGlobalNotInsideTypeof);
-    CHECK_SLOT_KIND(helper, 2, FeedbackSlotKind::kStoreGlobalSloppy);
-    CHECK_SLOT_KIND(helper, 3, FeedbackSlotKind::kLoadGlobalNotInsideTypeof);
+    CHECK_SLOT_KIND(helper, 2, FeedbackSlotKind::kLoadGlobalNotInsideTypeof);
   }
 
   {

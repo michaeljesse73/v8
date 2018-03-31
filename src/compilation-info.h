@@ -53,7 +53,10 @@ class V8_EXPORT_PRIVATE CompilationInfo final {
     kLoopPeelingEnabled = 1 << 11,
     kUntrustedCodeMitigations = 1 << 12,
     kSwitchJumpTableEnabled = 1 << 13,
-    kGenerateSpeculationPoison = 1 << 14,
+    kCalledWithCodeStartRegister = 1 << 14,
+    kPoisonRegisterArguments = 1 << 15,
+    kAllocationFoldingEnabled = 1 << 16,
+    kAnalyzeEnvironmentLiveness = 1 << 17,
   };
 
   // TODO(mtrofin): investigate if this might be generalized outside wasm, with
@@ -63,9 +66,9 @@ class V8_EXPORT_PRIVATE CompilationInfo final {
   struct WasmCodeDesc {
     CodeDesc code_desc;
     size_t safepoint_table_offset = 0;
+    size_t handler_table_offset = 0;
     uint32_t frame_slot_count = 0;
     Handle<ByteArray> source_positions_table;
-    MaybeHandle<HandlerTable> handler_table;
   };
 
   // Construct a compilation info for unoptimized compilation.
@@ -177,10 +180,32 @@ class V8_EXPORT_PRIVATE CompilationInfo final {
     return GetFlag(kSwitchJumpTableEnabled);
   }
 
-  bool is_speculation_poison_enabled() const {
-    bool enabled = GetFlag(kGenerateSpeculationPoison);
-    DCHECK_IMPLIES(enabled, has_untrusted_code_mitigations());
+  bool called_with_code_start_register() const {
+    bool enabled = GetFlag(kCalledWithCodeStartRegister);
     return enabled;
+  }
+
+  void MarkAsPoisoningRegisterArguments() {
+    DCHECK(has_untrusted_code_mitigations());
+    SetFlag(kPoisonRegisterArguments);
+  }
+  bool is_poisoning_register_arguments() const {
+    bool enabled = GetFlag(kPoisonRegisterArguments);
+    DCHECK_IMPLIES(enabled, has_untrusted_code_mitigations());
+    DCHECK_IMPLIES(enabled, called_with_code_start_register());
+    return enabled;
+  }
+
+  void MarkAsAllocationFoldingEnabled() { SetFlag(kAllocationFoldingEnabled); }
+  bool is_allocation_folding_enabled() const {
+    return GetFlag(kAllocationFoldingEnabled);
+  }
+
+  void MarkAsAnalyzeEnvironmentLiveness() {
+    SetFlag(kAnalyzeEnvironmentLiveness);
+  }
+  bool is_analyze_environment_liveness() const {
+    return GetFlag(kAnalyzeEnvironmentLiveness);
   }
 
   // Code getters and setters.

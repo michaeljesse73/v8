@@ -53,10 +53,6 @@ using v8::internal::EmbeddedVector;
 using v8::internal::Logger;
 using v8::internal::StrLength;
 
-namespace internal {
-class InstructionStream;
-}
-
 namespace {
 
 
@@ -703,7 +699,7 @@ TEST(Issue539892) {
    private:
     void LogRecordedBuffer(i::AbstractCode* code, i::SharedFunctionInfo* shared,
                            const char* name, int length) override {}
-    void LogRecordedBuffer(const i::InstructionStream* stream, const char* name,
+    void LogRecordedBuffer(const i::wasm::WasmCode* code, const char* name,
                            int length) override {}
   } code_event_logger;
   SETUP_FLAGS();

@@ -504,6 +504,13 @@ Reduction JSTypedLowering::ReduceJSAdd(Node* node) {
     r.ConvertInputsToNumber();
     return r.ChangeToPureOperator(simplified()->NumberAdd(), Type::Number());
   }
+  if (BinaryOperationHintOf(node->op()) == BinaryOperationHint::kString) {
+    // Always bake in String feedback into the graph.
+    // TODO(bmeurer): Consider adding a SpeculativeStringAdd operator,
+    // and use that in JSTypeHintLowering instead of looking at the
+    // binary operation feedback here.
+    r.CheckInputsToString();
+  }
   if (r.OneInputIs(Type::String())) {
     // We know that (at least) one input is already a String,
     // so try to strength-reduce the non-String input.
@@ -539,7 +546,7 @@ Reduction JSTypedLowering::ReduceJSAdd(Node* node) {
       return ReduceCreateConsString(node);
     }
     // Eliminate useless concatenation of empty string.
-    if (BinaryOperationHintOf(node->op()) == BinaryOperationHint::kString) {
+    if (r.BothInputsAre(Type::String())) {
       Node* effect = NodeProperties::GetEffectInput(node);
       Node* control = NodeProperties::GetControlInput(node);
       if (r.LeftInputIs(empty_string_type_)) {
@@ -582,6 +589,8 @@ Reduction JSTypedLowering::ReduceJSAdd(Node* node) {
     NodeProperties::ChangeOp(node, common()->Call(call_descriptor));
     return Changed(node);
   }
+  // We never get here when we had String feedback.
+  DCHECK_NE(BinaryOperationHint::kString, BinaryOperationHintOf(node->op()));
   return NoChange();
 }
 
@@ -1361,7 +1370,7 @@ Node* JSTypedLowering::BuildGetModuleCell(Node* node) {
   Node* effect = NodeProperties::GetEffectInput(node);
   Node* control = NodeProperties::GetControlInput(node);
 
-  int32_t cell_index = OpParameter<int32_t>(node);
+  int32_t cell_index = OpParameter<int32_t>(node->op());
   Node* module = NodeProperties::GetValueInput(node, 0);
   Type* module_type = NodeProperties::GetType(module);
 
@@ -1411,8 +1420,9 @@ Reduction JSTypedLowering::ReduceJSStoreModule(Node* node) {
   Node* effect = NodeProperties::GetEffectInput(node);
   Node* control = NodeProperties::GetControlInput(node);
   Node* value = NodeProperties::GetValueInput(node, 1);
-  DCHECK_EQ(ModuleDescriptor::GetCellIndexKind(OpParameter<int32_t>(node)),
-            ModuleDescriptor::kExport);
+  DCHECK_EQ(
+      ModuleDescriptor::GetCellIndexKind(OpParameter<int32_t>(node->op())),
+      ModuleDescriptor::kExport);
 
   Node* cell = BuildGetModuleCell(node);
   if (cell->op()->EffectOutputCount() > 0) effect = cell;
@@ -1518,7 +1528,12 @@ Reduction JSTypedLowering::ReduceJSConstructForwardVarargs(Node* node) {
   Node* new_target = NodeProperties::GetValueInput(node, arity + 1);
 
   // Check if {target} is a JSFunction.
-  if (target_type->Is(Type::Function())) {
+  if (target_type->IsHeapConstant() &&
+      target_type->AsHeapConstant()->Value()->IsJSFunction()) {
+    // Only optimize [[Construct]] here if {function} is a Constructor.
+    Handle<JSFunction> function =
+        Handle<JSFunction>::cast(target_type->AsHeapConstant()->Value());
+    if (!function->IsConstructor()) return NoChange();
     // Patch {node} to an indirect call via ConstructFunctionForwardVarargs.
     Callable callable = CodeFactory::ConstructFunctionForwardVarargs(isolate());
     node->RemoveInput(arity + 1);
@@ -1558,6 +1573,9 @@ Reduction JSTypedLowering::ReduceJSConstruct(Node* node) {
     const int builtin_index = shared->construct_stub()->builtin_index();
     const bool is_builtin = (builtin_index != -1);
 
+    // Only optimize [[Construct]] here if {function} is a Constructor.
+    if (!function->IsConstructor()) return NoChange();
+
     CallDescriptor::Flags flags = CallDescriptor::kNeedsFrameState;
 
     if (is_builtin && Builtins::HasCppImplementation(builtin_index) &&
@@ -1590,23 +1608,6 @@ Reduction JSTypedLowering::ReduceJSConstruct(Node* node) {
                     isolate(), graph()->zone(), callable.descriptor(),
                     1 + arity, flags)));
     }
-    return Changed(node);
-  }
-
-  // Check if {target} is a JSFunction.
-  if (target_type->Is(Type::Function())) {
-    // Patch {node} to an indirect call via the ConstructFunction builtin.
-    Callable callable = CodeFactory::ConstructFunction(isolate());
-    node->RemoveInput(arity + 1);
-    node->InsertInput(graph()->zone(), 0,
-                      jsgraph()->HeapConstant(callable.code()));
-    node->InsertInput(graph()->zone(), 2, new_target);
-    node->InsertInput(graph()->zone(), 3, jsgraph()->Constant(arity));
-    node->InsertInput(graph()->zone(), 4, jsgraph()->UndefinedConstant());
-    NodeProperties::ChangeOp(
-        node, common()->Call(Linkage::GetStubCallDescriptor(
-                  isolate(), graph()->zone(), callable.descriptor(), 1 + arity,
-                  CallDescriptor::kNeedsFrameState)));
     return Changed(node);
   }
 
@@ -1673,9 +1674,6 @@ Reduction JSTypedLowering::ReduceJSCall(Node* node) {
       return NoChange();
     }
 
-    const int builtin_index = shared->code()->builtin_index();
-    const bool is_builtin = (builtin_index != -1);
-
     // Class constructors are callable, but [[Call]] will raise an exception.
     // See ES6 section 9.2.1 [[Call]] ( thisArgument, argumentsList ).
     if (IsClassConstructor(shared->kind())) return NoChange();
@@ -1719,9 +1717,11 @@ Reduction JSTypedLowering::ReduceJSCall(Node* node) {
           node, common()->Call(Linkage::GetStubCallDescriptor(
                     isolate(), graph()->zone(), callable.descriptor(),
                     1 + arity, flags)));
-    } else if (is_builtin && Builtins::HasCppImplementation(builtin_index)) {
+    } else if (shared->HasBuiltinId() &&
+               Builtins::HasCppImplementation(shared->builtin_id())) {
       // Patch {node} to a direct CEntryStub call.
-      ReduceBuiltin(isolate(), jsgraph(), node, builtin_index, arity, flags);
+      ReduceBuiltin(isolate(), jsgraph(), node, shared->builtin_id(), arity,
+                    flags);
     } else {
       // Patch {node} to a direct call.
       node->InsertInput(graph()->zone(), arity + 2, new_target);
@@ -1753,7 +1753,7 @@ Reduction JSTypedLowering::ReduceJSCall(Node* node) {
   if (p.convert_mode() != convert_mode) {
     NodeProperties::ChangeOp(
         node, javascript()->Call(p.arity(), p.frequency(), p.feedback(),
-                                 convert_mode));
+                                 convert_mode, p.speculation_mode()));
     return Changed(node);
   }
 
@@ -2029,7 +2029,7 @@ Reduction JSTypedLowering::ReduceJSGeneratorStore(Node* node) {
   Node* context = NodeProperties::GetContextInput(node);
   Node* effect = NodeProperties::GetEffectInput(node);
   Node* control = NodeProperties::GetControlInput(node);
-  int register_count = OpParameter<int>(node);
+  int register_count = GeneratorStoreRegisterCountOf(node->op());
 
   FieldAccess array_field = AccessBuilder::ForJSGeneratorObjectRegisterFile();
   FieldAccess context_field = AccessBuilder::ForJSGeneratorObjectContext();
@@ -2100,7 +2100,7 @@ Reduction JSTypedLowering::ReduceJSGeneratorRestoreRegister(Node* node) {
   Node* generator = NodeProperties::GetValueInput(node, 0);
   Node* effect = NodeProperties::GetEffectInput(node);
   Node* control = NodeProperties::GetControlInput(node);
-  int index = OpParameter<int>(node);
+  int index = RestoreRegisterIndexOf(node->op());
 
   FieldAccess array_field = AccessBuilder::ForJSGeneratorObjectRegisterFile();
   FieldAccess element_field = AccessBuilder::ForFixedArraySlot(index);

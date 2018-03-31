@@ -5,6 +5,7 @@
 #ifndef V8_UNITTESTS_COMPILER_NODE_TEST_UTILS_H_
 #define V8_UNITTESTS_COMPILER_NODE_TEST_UTILS_H_
 
+#include "src/compiler/common-operator.h"
 #include "src/compiler/machine-operator.h"
 #include "src/compiler/simplified-operator.h"
 #include "src/machine-type.h"
@@ -68,7 +69,7 @@ Matcher<Node*> IsIfFalse(const Matcher<Node*>& control_matcher);
 Matcher<Node*> IsIfSuccess(const Matcher<Node*>& control_matcher);
 Matcher<Node*> IsSwitch(const Matcher<Node*>& value_matcher,
                         const Matcher<Node*>& control_matcher);
-Matcher<Node*> IsIfValue(const Matcher<int32_t>& value_matcher,
+Matcher<Node*> IsIfValue(const Matcher<IfValueParameters>& value_matcher,
                          const Matcher<Node*>& control_matcher);
 Matcher<Node*> IsIfDefault(const Matcher<Node*>& control_matcher);
 Matcher<Node*> IsBeginRegion(const Matcher<Node*>& effect_matcher);
@@ -271,7 +272,7 @@ Matcher<Node*> IsNumberSqrt(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsNumberTan(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsNumberTanh(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsNumberTrunc(const Matcher<Node*>& value_matcher);
-Matcher<Node*> IsStringFromCharCode(const Matcher<Node*>& value_matcher);
+Matcher<Node*> IsStringFromSingleCharCode(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsStringLength(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsAllocate(const Matcher<Node*>& size_matcher,
                           const Matcher<Node*>& effect_matcher,
@@ -309,6 +310,10 @@ Matcher<Node*> IsStoreElement(const Matcher<ElementAccess>& access_matcher,
                               const Matcher<Node*>& value_matcher,
                               const Matcher<Node*>& effect_matcher,
                               const Matcher<Node*>& control_matcher);
+
+Matcher<Node*> IsObjectIsFiniteNumber(const Matcher<Node*>& value_matcher);
+Matcher<Node*> IsObjectIsInteger(const Matcher<Node*>& value_matcher);
+Matcher<Node*> IsObjectIsSafeInteger(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsObjectIsNaN(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsObjectIsReceiver(const Matcher<Node*>& value_matcher);
 Matcher<Node*> IsObjectIsSmi(const Matcher<Node*>& value_matcher);
@@ -319,11 +324,16 @@ Matcher<Node*> IsLoad(const Matcher<LoadRepresentation>& rep_matcher,
                       const Matcher<Node*>& index_matcher,
                       const Matcher<Node*>& effect_matcher,
                       const Matcher<Node*>& control_matcher);
-Matcher<Node*> IsUnalignedLoad(
-    const Matcher<UnalignedLoadRepresentation>& rep_matcher,
-    const Matcher<Node*>& base_matcher, const Matcher<Node*>& index_matcher,
-    const Matcher<Node*>& effect_matcher,
-    const Matcher<Node*>& control_matcher);
+Matcher<Node*> IsPoisonedLoad(const Matcher<LoadRepresentation>& rep_matcher,
+                              const Matcher<Node*>& base_matcher,
+                              const Matcher<Node*>& index_matcher,
+                              const Matcher<Node*>& effect_matcher,
+                              const Matcher<Node*>& control_matcher);
+Matcher<Node*> IsUnalignedLoad(const Matcher<LoadRepresentation>& rep_matcher,
+                               const Matcher<Node*>& base_matcher,
+                               const Matcher<Node*>& index_matcher,
+                               const Matcher<Node*>& effect_matcher,
+                               const Matcher<Node*>& control_matcher);
 Matcher<Node*> IsStore(const Matcher<StoreRepresentation>& rep_matcher,
                        const Matcher<Node*>& base_matcher,
                        const Matcher<Node*>& index_matcher,
@@ -480,6 +490,8 @@ Matcher<Node*> IsWord32ReverseBytes(const Matcher<Node*>& value_matcher);
 
 Matcher<Node*> IsStackSlot();
 
+Matcher<Node*> IsSpeculativeToNumber(const Matcher<Node*>& value_matcher);
+
 // Helpers
 static inline Matcher<Node*> IsIntPtrConstant(const intptr_t value) {
   return kPointerSize == 8 ? IsInt64Constant(static_cast<int64_t>(value))
@@ -550,7 +562,7 @@ static inline Matcher<Node*> IsChangeUint32ToWord(
   return kPointerSize == 8 ? IsChangeUint32ToUint64(matcher) : matcher;
 }
 
-static inline Matcher<Node*> IsTruncateWordToWord32(
+static inline Matcher<Node*> IsTruncateIntPtrToInt32(
     const Matcher<Node*>& matcher) {
   return kPointerSize == 8 ? IsTruncateInt64ToInt32(matcher) : matcher;
 }

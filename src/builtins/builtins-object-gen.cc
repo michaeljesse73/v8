@@ -141,14 +141,15 @@ Node* ObjectBuiltinsAssembler::ConstructDataDescriptor(Node* context,
 
 Node* ObjectBuiltinsAssembler::IsSpecialReceiverMap(SloppyTNode<Map> map) {
   CSA_SLOW_ASSERT(this, IsMap(map));
-  Node* is_special = IsSpecialReceiverInstanceType(LoadMapInstanceType(map));
+  TNode<BoolT> is_special =
+      IsSpecialReceiverInstanceType(LoadMapInstanceType(map));
   uint32_t mask =
       Map::HasNamedInterceptorBit::kMask | Map::IsAccessCheckNeededBit::kMask;
   USE(mask);
   // Interceptors or access checks imply special receiver.
   CSA_ASSERT(this,
-             SelectConstant(IsSetWord32(LoadMapBitField(map), mask), is_special,
-                            Int32Constant(1), MachineRepresentation::kWord32));
+             SelectConstant<BoolT>(IsSetWord32(LoadMapBitField(map), mask),
+                                   is_special, Int32TrueConstant()));
   return is_special;
 }
 
@@ -312,8 +313,8 @@ TNode<JSArray> ObjectEntriesValuesBuiltinsAssembler::FastGetOwnValuesOrEntries(
       // so, map will not be changed.
       CSA_ASSERT(this, WordEqual(map, LoadMap(object)));
       TNode<Uint32T> descriptor_index = TNode<Uint32T>::UncheckedCast(
-          TruncateWordToWord32(var_descriptor_number.value()));
-      Node* next_key = DescriptorArrayGetKey(descriptors, descriptor_index);
+          TruncateIntPtrToInt32(var_descriptor_number.value()));
+      Node* next_key = GetKey(descriptors, descriptor_index);
 
       // Skip Symbols.
       GotoIf(IsSymbol(next_key), &loop_condition);
@@ -331,8 +332,8 @@ TNode<JSArray> ObjectEntriesValuesBuiltinsAssembler::FastGetOwnValuesOrEntries(
 
       VARIABLE(var_property_value, MachineRepresentation::kTagged,
                UndefinedConstant());
-      Node* descriptor_name_index = DescriptorArrayToKeyIndex(
-          TruncateWordToWord32(var_descriptor_number.value()));
+      TNode<IntPtrT> descriptor_name_index = ToKeyIndex<DescriptorArray>(
+          Unsigned(TruncateIntPtrToInt32(var_descriptor_number.value())));
 
       // Let value be ? Get(O, key).
       LoadPropertyFromFastObject(object, map, descriptors,
@@ -394,7 +395,7 @@ TF_BUILTIN(ObjectPrototypeToLocaleString, CodeStubAssembler) {
   GotoIf(IsNullOrUndefined(receiver), &if_null_or_undefined);
 
   TNode<Object> method =
-      CAST(GetProperty(context, receiver, factory()->toString_string()));
+      GetProperty(context, receiver, factory()->toString_string());
   Return(CallJS(CodeFactory::Call(isolate()), context, method, receiver));
 
   BIND(&if_null_or_undefined);
@@ -1129,9 +1130,7 @@ TF_BUILTIN(ObjectGetOwnPropertyDescriptor, ObjectBuiltinsAssembler) {
       return_undefined(this, Label::kDeferred), if_notunique_name(this);
   Node* map = LoadMap(object);
   Node* instance_type = LoadMapInstanceType(map);
-  GotoIf(Int32LessThanOrEqual(instance_type,
-                              Int32Constant(LAST_SPECIAL_RECEIVER_TYPE)),
-         &call_runtime);
+  GotoIf(IsSpecialReceiverInstanceType(instance_type), &call_runtime);
   {
     VARIABLE(var_index, MachineType::PointerRepresentation(),
              IntPtrConstant(0));

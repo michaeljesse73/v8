@@ -482,6 +482,18 @@ void EmitWordLoadPoisoningIfNeeded(CodeGenerator* codegen,
     __ j(not_equal, &binop);                                    \
   } while (false)
 
+#define ASSEMBLE_ATOMIC64_BINOP(bin_inst, mov_inst, cmpxchg_inst) \
+  do {                                                            \
+    Label binop;                                                  \
+    __ bind(&binop);                                              \
+    __ mov_inst(rax, i.MemoryOperand(1));                         \
+    __ movq(i.TempRegister(0), rax);                              \
+    __ bin_inst(i.TempRegister(0), i.InputRegister(0));           \
+    __ lock();                                                    \
+    __ cmpxchg_inst(i.MemoryOperand(1), i.TempRegister(0));       \
+    __ j(not_equal, &binop);                                      \
+  } while (false)
+
 void CodeGenerator::AssembleDeconstructFrame() {
   unwinding_info_writer_.MarkFrameDeconstructed(__ pc_offset());
   __ movq(rsp, rbp);
@@ -606,18 +618,20 @@ void CodeGenerator::BailoutIfDeoptimized() {
   __ j(not_zero, code, RelocInfo::CODE_TARGET);
 }
 
-void CodeGenerator::GenerateSpeculationPoison() {
-  // Calculate a mask which has all bits set in the normal case, but has all
+void CodeGenerator::GenerateSpeculationPoisonFromCodeStartRegister() {
+  // Set a mask which has all bits set in the normal case, but has all
   // bits cleared if we are speculatively executing the wrong PC.
-  //    difference = (current - expected) | (expected - current)
-  //    poison = ~(difference >> (kBitsPerPointer - 1))
   __ ComputeCodeStartAddress(rbx);
-  __ movp(kSpeculationPoisonRegister, rbx);
-  __ subq(kSpeculationPoisonRegister, kJavaScriptCallCodeStartRegister);
-  __ subq(kJavaScriptCallCodeStartRegister, rbx);
-  __ orq(kSpeculationPoisonRegister, kJavaScriptCallCodeStartRegister);
-  __ sarq(kSpeculationPoisonRegister, Immediate(kBitsPerPointer - 1));
-  __ notq(kSpeculationPoisonRegister);
+  __ xorq(kSpeculationPoisonRegister, kSpeculationPoisonRegister);
+  __ cmpp(kJavaScriptCallCodeStartRegister, rbx);
+  __ movp(rbx, Immediate(-1));
+  __ cmovq(equal, kSpeculationPoisonRegister, rbx);
+}
+
+void CodeGenerator::AssembleRegisterArgumentPoisoning() {
+  __ andq(kJSFunctionRegister, kSpeculationPoisonRegister);
+  __ andq(kContextRegister, kSpeculationPoisonRegister);
+  __ andq(rsp, kSpeculationPoisonRegister);
 }
 
 // Assembles an instruction after register allocation, producing machine code.
@@ -809,6 +823,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
             __ RequiredStackSizeForCallerSaved(fp_mode_, kReturnRegister0);
         frame_access_state()->IncreaseSPDelta(bytes / kPointerSize);
       }
+      // TODO(tebbi): Do we need an lfence here?
       break;
     }
     case kArchJmp:
@@ -870,6 +885,9 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
         __ movq(i.OutputRegister(), rbp);
       }
       break;
+    case kArchRootsPointer:
+      __ movq(i.OutputRegister(), kRootRegister);
+      break;
     case kArchTruncateDoubleToI: {
       auto result = i.OutputRegister();
       auto input = i.InputDoubleRegister(0);
@@ -902,6 +920,10 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       __ bind(ool->exit());
       break;
     }
+    case kArchPoisonOnSpeculationWord:
+      DCHECK_EQ(i.OutputRegister(), i.InputRegister(0));
+      __ andq(i.InputRegister(0), kSpeculationPoisonRegister);
+      break;
     case kLFence:
       __ lfence();
       break;
@@ -1893,16 +1915,28 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
         __ movss(operand, i.InputDoubleRegister(index));
       }
       break;
-    case kX64Movsd:
+    case kX64Movsd: {
       EmitOOLTrapIfNeeded(zone(), this, opcode, instr, i, __ pc_offset());
       if (instr->HasOutput()) {
-        __ Movsd(i.OutputDoubleRegister(), i.MemoryOperand());
+        const MemoryAccessMode access_mode =
+            static_cast<MemoryAccessMode>(MiscField::decode(opcode));
+        if (access_mode == kMemoryAccessPoisoned) {
+          // If we have to poison the loaded value, we load into a general
+          // purpose register first, mask it with the poison, and move the
+          // value from the general purpose register into the double register.
+          __ movq(kScratchRegister, i.MemoryOperand());
+          __ andq(kScratchRegister, kSpeculationPoisonRegister);
+          __ Movq(i.OutputDoubleRegister(), kScratchRegister);
+        } else {
+          __ Movsd(i.OutputDoubleRegister(), i.MemoryOperand());
+        }
       } else {
         size_t index = 0;
         Operand operand = i.MemoryOperand(&index);
         __ Movsd(operand, i.InputDoubleRegister(index));
       }
       break;
+    }
     case kX64Movdqu: {
       CpuFeatureScope sse_scope(tasm(), SSSE3);
       EmitOOLTrapIfNeeded(zone(), this, opcode, instr, i, __ pc_offset());
@@ -2167,6 +2201,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     }
     case kX64F32x4AddHoriz: {
       DCHECK_EQ(i.OutputSimd128Register(), i.InputSimd128Register(0));
+      CpuFeatureScope sse_scope(tasm(), SSE3);
       __ haddps(i.OutputSimd128Register(), i.InputSimd128Register(1));
       break;
     }
@@ -2642,77 +2677,77 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kX64StackCheck:
       __ CompareRoot(rsp, Heap::kStackLimitRootIndex);
       break;
-    case kAtomicExchangeInt8: {
+    case kWord32AtomicExchangeInt8: {
       __ xchgb(i.InputRegister(0), i.MemoryOperand(1));
       __ movsxbl(i.InputRegister(0), i.InputRegister(0));
       break;
     }
-    case kAtomicExchangeUint8: {
+    case kWord32AtomicExchangeUint8: {
       __ xchgb(i.InputRegister(0), i.MemoryOperand(1));
       __ movzxbl(i.InputRegister(0), i.InputRegister(0));
       break;
     }
-    case kAtomicExchangeInt16: {
+    case kWord32AtomicExchangeInt16: {
       __ xchgw(i.InputRegister(0), i.MemoryOperand(1));
       __ movsxwl(i.InputRegister(0), i.InputRegister(0));
       break;
     }
-    case kAtomicExchangeUint16: {
+    case kWord32AtomicExchangeUint16: {
       __ xchgw(i.InputRegister(0), i.MemoryOperand(1));
       __ movzxwl(i.InputRegister(0), i.InputRegister(0));
       break;
     }
-    case kAtomicExchangeWord32: {
+    case kWord32AtomicExchangeWord32: {
       __ xchgl(i.InputRegister(0), i.MemoryOperand(1));
       break;
     }
-    case kAtomicCompareExchangeInt8: {
+    case kWord32AtomicCompareExchangeInt8: {
       __ lock();
       __ cmpxchgb(i.MemoryOperand(2), i.InputRegister(1));
       __ movsxbl(rax, rax);
       break;
     }
-    case kAtomicCompareExchangeUint8: {
+    case kWord32AtomicCompareExchangeUint8: {
       __ lock();
       __ cmpxchgb(i.MemoryOperand(2), i.InputRegister(1));
       __ movzxbl(rax, rax);
       break;
     }
-    case kAtomicCompareExchangeInt16: {
+    case kWord32AtomicCompareExchangeInt16: {
       __ lock();
       __ cmpxchgw(i.MemoryOperand(2), i.InputRegister(1));
       __ movsxwl(rax, rax);
       break;
     }
-    case kAtomicCompareExchangeUint16: {
+    case kWord32AtomicCompareExchangeUint16: {
       __ lock();
       __ cmpxchgw(i.MemoryOperand(2), i.InputRegister(1));
       __ movzxwl(rax, rax);
       break;
     }
-    case kAtomicCompareExchangeWord32: {
+    case kWord32AtomicCompareExchangeWord32: {
       __ lock();
       __ cmpxchgl(i.MemoryOperand(2), i.InputRegister(1));
       break;
     }
 #define ATOMIC_BINOP_CASE(op, inst)              \
-  case kAtomic##op##Int8:                        \
+  case kWord32Atomic##op##Int8:                  \
     ASSEMBLE_ATOMIC_BINOP(inst, movb, cmpxchgb); \
     __ movsxbl(rax, rax);                        \
     break;                                       \
-  case kAtomic##op##Uint8:                       \
+  case kWord32Atomic##op##Uint8:                 \
     ASSEMBLE_ATOMIC_BINOP(inst, movb, cmpxchgb); \
     __ movzxbl(rax, rax);                        \
     break;                                       \
-  case kAtomic##op##Int16:                       \
+  case kWord32Atomic##op##Int16:                 \
     ASSEMBLE_ATOMIC_BINOP(inst, movw, cmpxchgw); \
     __ movsxwl(rax, rax);                        \
     break;                                       \
-  case kAtomic##op##Uint16:                      \
+  case kWord32Atomic##op##Uint16:                \
     ASSEMBLE_ATOMIC_BINOP(inst, movw, cmpxchgw); \
     __ movzxwl(rax, rax);                        \
     break;                                       \
-  case kAtomic##op##Word32:                      \
+  case kWord32Atomic##op##Word32:                \
     ASSEMBLE_ATOMIC_BINOP(inst, movl, cmpxchgl); \
     break;
       ATOMIC_BINOP_CASE(Add, addl)
@@ -2721,19 +2756,102 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       ATOMIC_BINOP_CASE(Or, orl)
       ATOMIC_BINOP_CASE(Xor, xorl)
 #undef ATOMIC_BINOP_CASE
-    case kAtomicLoadInt8:
-    case kAtomicLoadUint8:
-    case kAtomicLoadInt16:
-    case kAtomicLoadUint16:
-    case kAtomicLoadWord32:
-    case kAtomicStoreWord8:
-    case kAtomicStoreWord16:
-    case kAtomicStoreWord32:
+    case kX64Word64AtomicExchangeUint8: {
+      __ xchgb(i.InputRegister(0), i.MemoryOperand(1));
+      __ movzxbq(i.InputRegister(0), i.InputRegister(0));
+      break;
+    }
+    case kX64Word64AtomicExchangeUint16: {
+      __ xchgw(i.InputRegister(0), i.MemoryOperand(1));
+      __ movzxwq(i.InputRegister(0), i.InputRegister(0));
+      break;
+    }
+    case kX64Word64AtomicExchangeUint32: {
+      __ xchgl(i.InputRegister(0), i.MemoryOperand(1));
+      break;
+    }
+    case kX64Word64AtomicExchangeUint64: {
+      __ xchgq(i.InputRegister(0), i.MemoryOperand(1));
+      break;
+    }
+    case kX64Word64AtomicCompareExchangeUint8: {
+      __ lock();
+      __ cmpxchgb(i.MemoryOperand(2), i.InputRegister(1));
+      __ movzxbq(rax, rax);
+      break;
+    }
+    case kX64Word64AtomicCompareExchangeUint16: {
+      __ lock();
+      __ cmpxchgw(i.MemoryOperand(2), i.InputRegister(1));
+      __ movzxwq(rax, rax);
+      break;
+    }
+    case kX64Word64AtomicCompareExchangeUint32: {
+      __ lock();
+      __ cmpxchgl(i.MemoryOperand(2), i.InputRegister(1));
+      break;
+    }
+    case kX64Word64AtomicCompareExchangeUint64: {
+      __ lock();
+      __ cmpxchgq(i.MemoryOperand(2), i.InputRegister(1));
+      break;
+    }
+#define ATOMIC64_BINOP_CASE(op, inst)              \
+  case kX64Word64Atomic##op##Uint8:                \
+    ASSEMBLE_ATOMIC64_BINOP(inst, movb, cmpxchgb); \
+    __ movzxbq(rax, rax);                          \
+    break;                                         \
+  case kX64Word64Atomic##op##Uint16:               \
+    ASSEMBLE_ATOMIC64_BINOP(inst, movw, cmpxchgw); \
+    __ movzxwq(rax, rax);                          \
+    break;                                         \
+  case kX64Word64Atomic##op##Uint32:               \
+    ASSEMBLE_ATOMIC64_BINOP(inst, movl, cmpxchgl); \
+    break;                                         \
+  case kX64Word64Atomic##op##Uint64:               \
+    ASSEMBLE_ATOMIC64_BINOP(inst, movq, cmpxchgq); \
+    break;
+      ATOMIC64_BINOP_CASE(Add, addq)
+      ATOMIC64_BINOP_CASE(Sub, subq)
+      ATOMIC64_BINOP_CASE(And, andq)
+      ATOMIC64_BINOP_CASE(Or, orq)
+      ATOMIC64_BINOP_CASE(Xor, xorq)
+#undef ATOMIC64_BINOP_CASE
+    case kWord32AtomicLoadInt8:
+    case kWord32AtomicLoadUint8:
+    case kWord32AtomicLoadInt16:
+    case kWord32AtomicLoadUint16:
+    case kWord32AtomicLoadWord32:
+    case kWord32AtomicStoreWord8:
+    case kWord32AtomicStoreWord16:
+    case kWord32AtomicStoreWord32:
+    case kX64Word64AtomicLoadUint8:
+    case kX64Word64AtomicLoadUint16:
+    case kX64Word64AtomicLoadUint32:
+    case kX64Word64AtomicLoadUint64:
+    case kX64Word64AtomicStoreWord8:
+    case kX64Word64AtomicStoreWord16:
+    case kX64Word64AtomicStoreWord32:
+    case kX64Word64AtomicStoreWord64:
       UNREACHABLE();  // Won't be generated by instruction selector.
       break;
   }
   return kSuccess;
-}  // NOLINT(readability/fn_size)
+}  // NOLadability/fn_size)
+
+#undef ASSEMBLE_UNOP
+#undef ASSEMBLE_BINOP
+#undef ASSEMBLE_COMPARE
+#undef ASSEMBLE_MULT
+#undef ASSEMBLE_SHIFT
+#undef ASSEMBLE_MOVX
+#undef ASSEMBLE_SSE_BINOP
+#undef ASSEMBLE_SSE_UNOP
+#undef ASSEMBLE_AVX_BINOP
+#undef ASSEMBLE_IEEE754_BINOP
+#undef ASSEMBLE_IEEE754_UNOP
+#undef ASSEMBLE_ATOMIC_BINOP
+#undef ASSEMBLE_ATOMIC64_BINOP
 
 namespace {
 
@@ -3031,7 +3149,7 @@ void CodeGenerator::AssembleConstructFrame() {
     if (FLAG_code_comments) __ RecordComment("-- OSR entrypoint --");
     osr_pc_offset_ = __ pc_offset();
     shrink_slots -= static_cast<int>(osr_helper()->UnoptimizedFrameSlots());
-    InitializePoisonForLoadsIfNeeded();
+    ResetSpeculationPoison();
   }
 
   const RegList saves = call_descriptor->CalleeSavedRegisters();
@@ -3189,9 +3307,7 @@ void CodeGenerator::AssembleMove(InstructionOperand* source,
           __ movq(dst, src.ToInt64(), src.rmode());
         } else {
           int32_t value = src.ToInt32();
-          if (RelocInfo::IsWasmSizeReference(src.rmode())) {
-            __ movl(dst, Immediate(value, src.rmode()));
-          } else if (value == 0) {
+          if (value == 0) {
             __ xorl(dst, dst);
           } else {
             __ movl(dst, Immediate(value));
@@ -3203,7 +3319,6 @@ void CodeGenerator::AssembleMove(InstructionOperand* source,
         if (RelocInfo::IsWasmPtrReference(src.rmode())) {
           __ movq(dst, src.ToInt64(), src.rmode());
         } else {
-          DCHECK(!RelocInfo::IsWasmSizeReference(src.rmode()));
           __ Set(dst, src.ToInt64());
         }
         break;
@@ -3367,11 +3482,9 @@ void CodeGenerator::AssembleSwap(InstructionOperand* source,
         frame_access_state()->IncreaseSPDelta(1);
         unwinding_info_writer_.MaybeIncreaseBaseOffsetAt(__ pc_offset(),
                                                          kPointerSize);
-        Operand dst = g.ToOperand(destination);
-        __ movq(src, dst);
+        __ movq(src, g.ToOperand(destination));
         frame_access_state()->IncreaseSPDelta(-1);
-        dst = g.ToOperand(destination);
-        __ popq(dst);
+        __ popq(g.ToOperand(destination));
         unwinding_info_writer_.MaybeIncreaseBaseOffsetAt(__ pc_offset(),
                                                          -kPointerSize);
       } else {

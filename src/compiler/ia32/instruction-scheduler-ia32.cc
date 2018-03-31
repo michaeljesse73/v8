@@ -103,10 +103,15 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kAVXF32x4ExtractLane:
     case kSSEF32x4ReplaceLane:
     case kAVXF32x4ReplaceLane:
+    case kIA32F32x4SConvertI32x4:
+    case kSSEF32x4UConvertI32x4:
+    case kAVXF32x4UConvertI32x4:
     case kSSEF32x4Abs:
     case kAVXF32x4Abs:
     case kSSEF32x4Neg:
     case kAVXF32x4Neg:
+    case kIA32F32x4RecipApprox:
+    case kIA32F32x4RecipSqrtApprox:
     case kSSEF32x4Add:
     case kAVXF32x4Add:
     case kSSEF32x4Sub:
@@ -263,6 +268,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kAVXS128Xor:
     case kSSES128Select:
     case kAVXS128Select:
+    case kIA32S8x16Shuffle:
+    case kIA32S32x4Swizzle:
       return (instr->addressing_mode() == kMode_None)
           ? kNoOpcodeFlags
           : kIsLoadOperation | kHasSideEffect;

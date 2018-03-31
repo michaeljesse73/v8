@@ -92,14 +92,12 @@ void Assembler::emit_rex_64(Register reg, XMMRegister rm_reg) {
   emit(0x48 | (reg.code() & 0x8) >> 1 | rm_reg.code() >> 3);
 }
 
-
-void Assembler::emit_rex_64(Register reg, const Operand& op) {
-  emit(0x48 | reg.high_bit() << 2 | op.rex_);
+void Assembler::emit_rex_64(Register reg, Operand op) {
+  emit(0x48 | reg.high_bit() << 2 | op.data().rex);
 }
 
-
-void Assembler::emit_rex_64(XMMRegister reg, const Operand& op) {
-  emit(0x48 | (reg.code() & 0x8) >> 1 | op.rex_);
+void Assembler::emit_rex_64(XMMRegister reg, Operand op) {
+  emit(0x48 | (reg.code() & 0x8) >> 1 | op.data().rex);
 }
 
 
@@ -108,19 +106,14 @@ void Assembler::emit_rex_64(Register rm_reg) {
   emit(0x48 | rm_reg.high_bit());
 }
 
-
-void Assembler::emit_rex_64(const Operand& op) {
-  emit(0x48 | op.rex_);
-}
-
+void Assembler::emit_rex_64(Operand op) { emit(0x48 | op.data().rex); }
 
 void Assembler::emit_rex_32(Register reg, Register rm_reg) {
   emit(0x40 | reg.high_bit() << 2 | rm_reg.high_bit());
 }
 
-
-void Assembler::emit_rex_32(Register reg, const Operand& op) {
-  emit(0x40 | reg.high_bit() << 2  | op.rex_);
+void Assembler::emit_rex_32(Register reg, Operand op) {
+  emit(0x40 | reg.high_bit() << 2 | op.data().rex);
 }
 
 
@@ -128,26 +121,20 @@ void Assembler::emit_rex_32(Register rm_reg) {
   emit(0x40 | rm_reg.high_bit());
 }
 
-
-void Assembler::emit_rex_32(const Operand& op) {
-  emit(0x40 | op.rex_);
-}
-
+void Assembler::emit_rex_32(Operand op) { emit(0x40 | op.data().rex); }
 
 void Assembler::emit_optional_rex_32(Register reg, Register rm_reg) {
   byte rex_bits = reg.high_bit() << 2 | rm_reg.high_bit();
   if (rex_bits != 0) emit(0x40 | rex_bits);
 }
 
-
-void Assembler::emit_optional_rex_32(Register reg, const Operand& op) {
-  byte rex_bits =  reg.high_bit() << 2 | op.rex_;
+void Assembler::emit_optional_rex_32(Register reg, Operand op) {
+  byte rex_bits = reg.high_bit() << 2 | op.data().rex;
   if (rex_bits != 0) emit(0x40 | rex_bits);
 }
 
-
-void Assembler::emit_optional_rex_32(XMMRegister reg, const Operand& op) {
-  byte rex_bits =  (reg.code() & 0x8) >> 1 | op.rex_;
+void Assembler::emit_optional_rex_32(XMMRegister reg, Operand op) {
+  byte rex_bits = (reg.code() & 0x8) >> 1 | op.data().rex;
   if (rex_bits != 0) emit(0x40 | rex_bits);
 }
 
@@ -178,8 +165,8 @@ void Assembler::emit_optional_rex_32(XMMRegister rm_reg) {
   if (rm_reg.high_bit()) emit(0x41);
 }
 
-void Assembler::emit_optional_rex_32(const Operand& op) {
-  if (op.rex_ != 0) emit(0x40 | op.rex_);
+void Assembler::emit_optional_rex_32(Operand op) {
+  if (op.data().rex != 0) emit(0x40 | op.data().rex);
 }
 
 
@@ -192,9 +179,8 @@ void Assembler::emit_vex3_byte1(XMMRegister reg, XMMRegister rm,
 
 
 // byte 1 of 3-byte VEX
-void Assembler::emit_vex3_byte1(XMMRegister reg, const Operand& rm,
-                                LeadingOpcode m) {
-  byte rxb = ~((reg.high_bit() << 2) | rm.rex_) << 5;
+void Assembler::emit_vex3_byte1(XMMRegister reg, Operand rm, LeadingOpcode m) {
+  byte rxb = ~((reg.high_bit() << 2) | rm.data().rex) << 5;
   emit(rxb | m);
 }
 
@@ -237,11 +223,10 @@ void Assembler::emit_vex_prefix(Register reg, Register vreg, Register rm,
   emit_vex_prefix(ireg, ivreg, irm, l, pp, mm, w);
 }
 
-
-void Assembler::emit_vex_prefix(XMMRegister reg, XMMRegister vreg,
-                                const Operand& rm, VectorLength l,
-                                SIMDPrefix pp, LeadingOpcode mm, VexW w) {
-  if (rm.rex_ || mm != k0F || w != kW0) {
+void Assembler::emit_vex_prefix(XMMRegister reg, XMMRegister vreg, Operand rm,
+                                VectorLength l, SIMDPrefix pp, LeadingOpcode mm,
+                                VexW w) {
+  if (rm.data().rex || mm != k0F || w != kW0) {
     emit_vex3_byte0();
     emit_vex3_byte1(reg, rm, mm);
     emit_vex3_byte2(w, vreg, l, pp);
@@ -251,8 +236,7 @@ void Assembler::emit_vex_prefix(XMMRegister reg, XMMRegister vreg,
   }
 }
 
-
-void Assembler::emit_vex_prefix(Register reg, Register vreg, const Operand& rm,
+void Assembler::emit_vex_prefix(Register reg, Register vreg, Operand rm,
                                 VectorLength l, SIMDPrefix pp, LeadingOpcode mm,
                                 VexW w) {
   XMMRegister ireg = XMMRegister::from_code(reg.code());
@@ -319,7 +303,8 @@ Address RelocInfo::target_address() {
 
 Address RelocInfo::target_address_address() {
   DCHECK(IsCodeTarget(rmode_) || IsRuntimeEntry(rmode_) || IsWasmCall(rmode_) ||
-         rmode_ == EMBEDDED_OBJECT || rmode_ == EXTERNAL_REFERENCE);
+         IsEmbeddedObject(rmode_) || IsExternalReference(rmode_) ||
+         IsOffHeapTarget(rmode_));
   return reinterpret_cast<Address>(pc_);
 }
 
@@ -399,6 +384,11 @@ void RelocInfo::set_target_runtime_entry(Address target,
   }
 }
 
+Address RelocInfo::target_off_heap_target() {
+  DCHECK(IsOffHeapTarget(rmode_));
+  return Memory::Address_at(pc_);
+}
+
 void RelocInfo::WipeOut() {
   if (IsEmbeddedObject(rmode_) || IsExternalReference(rmode_) ||
       IsInternalReference(rmode_)) {
@@ -426,52 +416,11 @@ void RelocInfo::Visit(ObjectVisitor* visitor) {
     visitor->VisitInternalReference(host(), this);
   } else if (RelocInfo::IsRuntimeEntry(mode)) {
     visitor->VisitRuntimeEntry(host(), this);
+  } else if (RelocInfo::IsOffHeapTarget(mode)) {
+    visitor->VisitOffHeapTarget(host(), this);
   }
 }
 
-// -----------------------------------------------------------------------------
-// Implementation of Operand
-
-void Operand::set_modrm(int mod, Register rm_reg) {
-  DCHECK(is_uint2(mod));
-  buf_[0] = mod << 6 | rm_reg.low_bits();
-  // Set REX.B to the high bit of rm.code().
-  rex_ |= rm_reg.high_bit();
-}
-
-
-void Operand::set_sib(ScaleFactor scale, Register index, Register base) {
-  DCHECK_EQ(len_, 1);
-  DCHECK(is_uint2(scale));
-  // Use SIB with no index register only for base rsp or r12. Otherwise we
-  // would skip the SIB byte entirely.
-  DCHECK(index != rsp || base == rsp || base == r12);
-  buf_[1] = (scale << 6) | (index.low_bits() << 3) | base.low_bits();
-  rex_ |= index.high_bit() << 1 | base.high_bit();
-  len_ = 2;
-}
-
-void Operand::set_disp8(int disp) {
-  DCHECK(is_int8(disp));
-  DCHECK(len_ == 1 || len_ == 2);
-  int8_t* p = reinterpret_cast<int8_t*>(&buf_[len_]);
-  *p = disp;
-  len_ += sizeof(int8_t);
-}
-
-void Operand::set_disp32(int disp) {
-  DCHECK(len_ == 1 || len_ == 2);
-  int32_t* p = reinterpret_cast<int32_t*>(&buf_[len_]);
-  *p = disp;
-  len_ += sizeof(int32_t);
-}
-
-void Operand::set_disp64(int64_t disp) {
-  DCHECK_EQ(1, len_);
-  int64_t* p = reinterpret_cast<int64_t*>(&buf_[len_]);
-  *p = disp;
-  len_ += sizeof(disp);
-}
 }  // namespace internal
 }  // namespace v8
 

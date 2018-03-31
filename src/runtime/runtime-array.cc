@@ -149,7 +149,8 @@ Object* PrepareElementsForSort(Handle<JSObject> object, uint32_t limit) {
     JSObject::ValidateElements(*object);
   } else if (object->HasFixedTypedArrayElements()) {
     // Typed arrays cannot have holes or undefined elements.
-    return Smi::FromInt(FixedArrayBase::cast(object->elements())->length());
+    int array_length = FixedArrayBase::cast(object->elements())->length();
+    return Smi::FromInt(Min(limit, static_cast<uint32_t>(array_length)));
   } else if (!object->HasDoubleElements()) {
     JSObject::EnsureWritableFastElements(object);
   }
@@ -791,24 +792,6 @@ RUNTIME_FUNCTION(Runtime_ArrayIndexOf) {
     }
   }
   return Smi::FromInt(-1);
-}
-
-
-RUNTIME_FUNCTION(Runtime_SpreadIterablePrepare) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(1, args.length());
-  CONVERT_ARG_HANDLE_CHECKED(Object, spread, 0);
-
-  // Iterate over the spread if we need to.
-  if (spread->IterationHasObservableEffects()) {
-    Handle<JSFunction> spread_iterable_function = isolate->spread_iterable();
-    ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-        isolate, spread,
-        Execution::Call(isolate, spread_iterable_function,
-                        isolate->factory()->undefined_value(), 1, &spread));
-  }
-
-  return *spread;
 }
 
 }  // namespace internal

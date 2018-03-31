@@ -29,81 +29,7 @@
 namespace v8 {
 namespace internal {
 
-ScriptData::ScriptData(const byte* data, int length)
-    : owns_data_(false), rejected_(false), data_(data), length_(length) {
-  if (!IsAligned(reinterpret_cast<intptr_t>(data), kPointerAlignment)) {
-    byte* copy = NewArray<byte>(length);
-    DCHECK(IsAligned(reinterpret_cast<intptr_t>(copy), kPointerAlignment));
-    CopyBytes(copy, data, length);
-    data_ = copy;
-    AcquireDataOwnership();
-  }
-}
 
-FunctionEntry ParseData::GetFunctionEntry(int start) {
-  // The current pre-data entry must be a FunctionEntry with the given
-  // start position.
-  if ((function_index_ + FunctionEntry::kSize <= Length()) &&
-      (static_cast<int>(Data()[function_index_]) == start)) {
-    int index = function_index_;
-    function_index_ += FunctionEntry::kSize;
-    Vector<unsigned> subvector(&(Data()[index]), FunctionEntry::kSize);
-    return FunctionEntry(subvector);
-  }
-  return FunctionEntry();
-}
-
-
-int ParseData::FunctionCount() {
-  int functions_size = FunctionsSize();
-  if (functions_size < 0) return 0;
-  if (functions_size % FunctionEntry::kSize != 0) return 0;
-  return functions_size / FunctionEntry::kSize;
-}
-
-
-bool ParseData::IsSane() {
-  if (!IsAligned(script_data_->length(), sizeof(unsigned))) return false;
-  // Check that the header data is valid and doesn't specify
-  // point to positions outside the store.
-  int data_length = Length();
-  if (data_length < PreparseDataConstants::kHeaderSize) return false;
-  if (Magic() != PreparseDataConstants::kMagicNumber) return false;
-  if (Version() != PreparseDataConstants::kCurrentVersion) return false;
-  // Check that the space allocated for function entries is sane.
-  int functions_size = FunctionsSize();
-  if (functions_size < 0) return false;
-  if (functions_size % FunctionEntry::kSize != 0) return false;
-  // Check that the total size has room for header and function entries.
-  int minimum_size =
-      PreparseDataConstants::kHeaderSize + functions_size;
-  if (data_length < minimum_size) return false;
-  return true;
-}
-
-
-void ParseData::Initialize() {
-  // Prepares state for use.
-  int data_length = Length();
-  if (data_length >= PreparseDataConstants::kHeaderSize) {
-    function_index_ = PreparseDataConstants::kHeaderSize;
-  }
-}
-
-
-unsigned ParseData::Magic() {
-  return Data()[PreparseDataConstants::kMagicOffset];
-}
-
-
-unsigned ParseData::Version() {
-  return Data()[PreparseDataConstants::kVersionOffset];
-}
-
-
-int ParseData::FunctionsSize() {
-  return static_cast<int>(Data()[PreparseDataConstants::kFunctionsSizeOffset]);
-}
 
 // Helper for putting parts of the parse results into a temporary zone when
 // parsing inner function bodies.
@@ -152,17 +78,6 @@ class DiscardableZoneScope {
 
   DISALLOW_COPY_AND_ASSIGN(DiscardableZoneScope);
 };
-
-void Parser::SetCachedData(ParseInfo* info) {
-  DCHECK_NULL(cached_parse_data_);
-  if (consume_cached_parse_data()) {
-    if (allow_lazy_) {
-      cached_parse_data_ = ParseData::FromCachedData(*info->cached_data());
-      if (cached_parse_data_ != nullptr) return;
-    }
-    compile_options_ = ScriptCompiler::kNoCompileOptions;
-  }
-}
 
 FunctionLiteral* Parser::DefaultConstructor(const AstRawString* name,
                                             bool call_super, int pos,
@@ -403,16 +318,6 @@ Expression* Parser::NewTargetExpression(int pos) {
   return proxy;
 }
 
-Expression* Parser::FunctionSentExpression(int pos) {
-  // We desugar function.sent into %_GeneratorGetInputOrDebugPos(generator).
-  ZoneList<Expression*>* args = new (zone()) ZoneList<Expression*>(1, zone());
-  VariableProxy* generator = factory()->NewVariableProxy(
-      function_state_->scope()->generator_object_var());
-  args->Add(generator, zone());
-  return factory()->NewCallRuntime(Runtime::kInlineGeneratorGetInputOrDebugPos,
-                                   args, pos);
-}
-
 Expression* Parser::ImportMetaExpression(int pos) {
   return factory()->NewCallRuntime(
       Runtime::kInlineGetImportMetaObject,
@@ -511,11 +416,8 @@ Parser::Parser(ParseInfo* info)
       mode_(PARSE_EAGERLY),  // Lazy mode must be set explicitly.
       source_range_map_(info->source_range_map()),
       target_stack_(nullptr),
-      compile_options_(info->compile_options()),
-      cached_parse_data_(nullptr),
       total_preparse_skipped_(0),
       temp_zoned_(false),
-      log_(nullptr),
       consumed_preparsed_scope_data_(info->consumed_preparsed_scope_data()),
       parameters_end_pos_(info->parameters_end_pos()) {
   // Even though we were passed ParseInfo, we should not store it in
@@ -541,12 +443,12 @@ Parser::Parser(ParseInfo* info)
                 info->extension() == nullptr && can_compile_lazily;
   set_allow_natives(FLAG_allow_natives_syntax || info->is_native());
   set_allow_harmony_do_expressions(FLAG_harmony_do_expressions);
-  set_allow_harmony_function_sent(FLAG_harmony_function_sent);
   set_allow_harmony_public_fields(FLAG_harmony_public_fields);
   set_allow_harmony_static_fields(FLAG_harmony_static_fields);
   set_allow_harmony_dynamic_import(FLAG_harmony_dynamic_import);
   set_allow_harmony_import_meta(FLAG_harmony_import_meta);
   set_allow_harmony_bigint(FLAG_harmony_bigint);
+  set_allow_harmony_numeric_separator(FLAG_harmony_numeric_separator);
   set_allow_harmony_optional_catch_binding(FLAG_harmony_optional_catch_binding);
   set_allow_harmony_private_fields(FLAG_harmony_private_fields);
   for (int feature = 0; feature < v8::Isolate::kUseCounterFeatureCount;
@@ -603,18 +505,6 @@ FunctionLiteral* Parser::ParseProgram(Isolate* isolate, ParseInfo* info) {
   fni_ = new (zone()) FuncNameInferrer(ast_value_factory(), zone());
 
   // Initialize parser state.
-  ParserLogger logger;
-
-  if (produce_cached_parse_data()) {
-    if (allow_lazy_) {
-      log_ = &logger;
-    } else {
-      compile_options_ = ScriptCompiler::kNoCompileOptions;
-    }
-  } else if (consume_cached_parse_data()) {
-    cached_parse_data_->Initialize();
-  }
-
   DeserializeScopeChain(info, info->maybe_outer_scope_info());
 
   scanner_.Initialize(info->character_stream(), info->is_module());
@@ -622,11 +512,6 @@ FunctionLiteral* Parser::ParseProgram(Isolate* isolate, ParseInfo* info) {
   MaybeResetCharacterStream(info, result);
 
   HandleSourceURLComments(isolate, info->script());
-
-  if (produce_cached_parse_data() && result != nullptr) {
-    *info->cached_data() = logger.GetScriptData();
-  }
-  log_ = nullptr;
 
   if (V8_UNLIKELY(FLAG_log_function_events) && result != nullptr) {
     double ms = timer.Elapsed().InMillisecondsF();
@@ -809,7 +694,7 @@ FunctionLiteral* Parser::ParseFunction(Isolate* isolate, ParseInfo* info,
   DCHECK_EQ(factory()->zone(), info->zone());
 
   // Initialize parser state.
-  Handle<String> name(shared_info->name());
+  Handle<String> name(shared_info->Name());
   info->set_function_name(ast_value_factory()->GetString(name));
   scanner_.Initialize(info->character_stream(), info->is_module());
 
@@ -905,8 +790,9 @@ FunctionLiteral* Parser::DoParseFunction(ParseInfo* info,
       scope->set_start_position(info->start_position());
       ExpressionClassifier formals_classifier(this);
       ParserFormalParameters formals(scope);
-      int rewritable_length =
-          function_state.destructuring_assignments_to_rewrite().length();
+      // The outer FunctionState should not contain destructuring assignments.
+      DCHECK_EQ(0,
+                function_state.destructuring_assignments_to_rewrite().length());
       {
         // Parsing patterns as variable reference expression creates
         // NewUnresolved references in current scope. Enter arrow function
@@ -944,8 +830,12 @@ FunctionLiteral* Parser::DoParseFunction(ParseInfo* info,
 
         // Pass `accept_IN=true` to ParseArrowFunctionLiteral --- This should
         // not be observable, or else the preparser would have failed.
-        Expression* expression =
-            ParseArrowFunctionLiteral(true, formals, rewritable_length, &ok);
+        const bool accept_IN = true;
+        // Any destructuring assignments in the current FunctionState
+        // actually belong to the arrow function itself.
+        const int rewritable_length = 0;
+        Expression* expression = ParseArrowFunctionLiteral(
+            accept_IN, formals, rewritable_length, &ok);
         if (ok) {
           // Scanning must end at the same position that was recorded
           // previously. If not, parsing has been interrupted due to a stack
@@ -958,10 +848,6 @@ FunctionLiteral* Parser::DoParseFunction(ParseInfo* info,
             // must produce a FunctionLiteral.
             DCHECK(expression->IsFunctionLiteral());
             result = expression->AsFunctionLiteral();
-            // Rewrite destructuring assignments in the parameters. (The ones
-            // inside the function body are rewritten by
-            // ParseArrowFunctionLiteral.)
-            RewriteDestructuringAssignments();
           } else {
             ok = false;
           }
@@ -2831,38 +2717,11 @@ Parser::LazyParsingResult Parser::SkipFunction(
 
   DCHECK_NE(kNoSourcePosition, function_scope->start_position());
   DCHECK_EQ(kNoSourcePosition, parameters_end_pos_);
-  if (produce_cached_parse_data()) CHECK(log_);
 
   DCHECK_IMPLIES(IsArrowFunction(kind),
                  scanner()->current_token() == Token::ARROW);
 
-  // Inner functions are not part of the cached data.
-  if (!is_inner_function && consume_cached_parse_data() &&
-      !cached_parse_data_->rejected()) {
-    // If we have cached data, we use it to skip parsing the function. The data
-    // contains the information we need to construct the lazy function.
-    FunctionEntry entry =
-        cached_parse_data_->GetFunctionEntry(function_scope->start_position());
-    // Check that cached data is valid. If not, mark it as invalid (the embedder
-    // handles it). Note that end position greater than end of stream is safe,
-    // and hard to check.
-    if (entry.is_valid() &&
-        entry.end_pos() > function_scope->start_position()) {
-      total_preparse_skipped_ += entry.end_pos() - position();
-      function_scope->set_end_position(entry.end_pos());
-      scanner()->SeekForward(entry.end_pos() - 1);
-      Expect(Token::RBRACE, CHECK_OK_VALUE(kLazyParsingComplete));
-      *num_parameters = entry.num_parameters();
-      SetLanguageMode(function_scope, entry.language_mode());
-      if (entry.uses_super_property())
-        function_scope->RecordSuperPropertyUsage();
-      SkipFunctionLiterals(entry.num_inner_functions());
-      return kLazyParsingComplete;
-    }
-    cached_parse_data_->Reject();
-  }
-
-  // FIXME(marja): There are 3 ways to skip functions now. Unify them.
+  // FIXME(marja): There are 2 ways to skip functions now. Unify them.
   DCHECK_NOT_NULL(consumed_preparsed_scope_data_);
   if (consumed_preparsed_scope_data_->HasData()) {
     DCHECK(FLAG_preparser_scope_analysis);
@@ -2913,6 +2772,9 @@ Parser::LazyParsingResult Parser::SkipFunction(
     *ok = false;
     return kLazyParsingComplete;
   }
+
+  set_allow_eval_cache(reusable_preparser()->allow_eval_cache());
+
   PreParserLogger* logger = reusable_preparser()->logger();
   function_scope->set_end_position(logger->end());
   Expect(Token::RBRACE, CHECK_OK_VALUE(kLazyParsingComplete));
@@ -2920,13 +2782,6 @@ Parser::LazyParsingResult Parser::SkipFunction(
       function_scope->end_position() - function_scope->start_position();
   *num_parameters = logger->num_parameters();
   SkipFunctionLiterals(logger->num_inner_functions());
-  if (!is_inner_function && produce_cached_parse_data()) {
-    DCHECK(log_);
-    log_->LogFunction(function_scope->start_position(),
-                      function_scope->end_position(), *num_parameters,
-                      language_mode(), function_scope->NeedsHomeObject(),
-                      logger->num_inner_functions());
-  }
   return kLazyParsingComplete;
 }
 
@@ -3451,6 +3306,15 @@ void Parser::CheckConflictingVarDeclarations(Scope* scope, bool* ok) {
   }
 }
 
+bool Parser::IsPropertyWithPrivateFieldKey(Expression* expression) {
+  if (!expression->IsProperty()) return false;
+  Property* property = expression->AsProperty();
+
+  if (!property->key()->IsVariableProxy()) return false;
+  VariableProxy* key = property->key()->AsVariableProxy();
+
+  return key->is_private_field();
+}
 
 void Parser::InsertShadowingVarBindingInitializers(Block* inner_block) {
   // For each var-binding that shadows a parameter, insert an assignment
@@ -3569,15 +3433,6 @@ void Parser::ParseOnBackground(ParseInfo* info) {
   DCHECK_NULL(info->literal());
   FunctionLiteral* result = nullptr;
 
-  ParserLogger logger;
-  if (produce_cached_parse_data()) {
-    if (allow_lazy_) {
-      log_ = &logger;
-    } else {
-      compile_options_ = ScriptCompiler::kNoCompileOptions;
-    }
-  }
-
   scanner_.Initialize(info->character_stream(), info->is_module());
   DCHECK(info->maybe_outer_scope_info().is_null());
 
@@ -3601,11 +3456,6 @@ void Parser::ParseOnBackground(ParseInfo* info) {
 
   // We cannot internalize on a background thread; a foreground task will take
   // care of calling AstValueFactory::Internalize just before compilation.
-
-  if (produce_cached_parse_data()) {
-    if (result != nullptr) *info->cached_data() = logger.GetScriptData();
-    log_ = nullptr;
-  }
 }
 
 Parser::TemplateLiteralState Parser::OpenTemplateLiteral(int pos) {
@@ -3642,35 +3492,10 @@ Expression* Parser::CloseTemplateLiteral(TemplateLiteralState* state, int start,
   DCHECK_EQ(cooked_strings->length(), expressions->length() + 1);
 
   if (!tag) {
-    Expression* first_string =
-        factory()->NewStringLiteral(cooked_strings->at(0), kNoSourcePosition);
-    if (expressions->length() == 0) return first_string;
-
-    // Build N-ary addition op to simplify code-generation.
-    // TODO(leszeks): Could we just store this expression in the
-    // TemplateLiteralState and build it as we go?
-    NaryOperation* expr = factory()->NewNaryOperation(
-        Token::ADD, first_string, 2 * expressions->length());
-
-    int i = 0;
-    while (i < expressions->length()) {
-      Expression* sub = expressions->at(i++);
-      const AstRawString* cooked_str = cooked_strings->at(i);
-      DCHECK_NOT_NULL(cooked_str);
-
-      // Let middle be ToString(sub).
-      ZoneList<Expression*>* args =
-          new (zone()) ZoneList<Expression*>(1, zone());
-      args->Add(sub, zone());
-      Expression* sub_to_string = factory()->NewCallRuntime(
-          Runtime::kInlineToString, args, sub->position());
-
-      expr->AddSubsequent(sub_to_string, sub->position());
-      expr->AddSubsequent(
-          factory()->NewStringLiteral(cooked_str, kNoSourcePosition),
-          sub->position());
+    if (cooked_strings->length() == 1) {
+      return factory()->NewStringLiteral(cooked_strings->first(), pos);
     }
-    return expr;
+    return factory()->NewTemplateLiteral(cooked_strings, expressions, pos);
   } else {
     // GetTemplateObject
     Expression* template_object =
@@ -3698,96 +3523,52 @@ bool OnlyLastArgIsSpread(ZoneList<Expression*>* args) {
 
 }  // namespace
 
-ZoneList<Expression*>* Parser::PrepareSpreadArguments(
+ArrayLiteral* Parser::ArrayLiteralFromListWithSpread(
     ZoneList<Expression*>* list) {
-  ZoneList<Expression*>* args = new (zone()) ZoneList<Expression*>(1, zone());
-  if (list->length() == 1) {
-    // Spread-call with single spread argument produces an InternalArray
-    // containing the values from the array.
-    //
-    // Function is called or constructed with the produced array of arguments
-    //
-    // EG: Apply(Func, Spread(spread0))
-    ZoneList<Expression*>* spread_list =
-        new (zone()) ZoneList<Expression*>(0, zone());
-    spread_list->Add(list->at(0)->AsSpread()->expression(), zone());
-    args->Add(factory()->NewCallRuntime(Runtime::kSpreadIterablePrepare,
-                                        spread_list, kNoSourcePosition),
-              zone());
-    return args;
-  } else {
-    // Spread-call with multiple arguments produces array literals for each
-    // sequences of unspread arguments, and converts each spread iterable to
-    // an Internal array. Finally, all of these produced arrays are flattened
-    // into a single InternalArray, containing the arguments for the call.
-    //
-    // EG: Apply(Func, Flatten([unspread0, unspread1], Spread(spread0),
-    //                         Spread(spread1), [unspread2, unspread3]))
-    int i = 0;
-    int n = list->length();
-    while (i < n) {
-      if (!list->at(i)->IsSpread()) {
-        ZoneList<Expression*>* unspread =
-            new (zone()) ZoneList<Expression*>(1, zone());
+  // If there's only a single spread argument, a fast path using CallWithSpread
+  // is taken.
+  DCHECK_LT(1, list->length());
 
-        // Push array of unspread parameters
-        while (i < n && !list->at(i)->IsSpread()) {
-          unspread->Add(list->at(i++), zone());
-        }
-        args->Add(factory()->NewArrayLiteral(unspread, kNoSourcePosition),
-                  zone());
-
-        if (i == n) break;
-      }
-
-      // Push eagerly spread argument
-      ZoneList<Expression*>* spread_list =
-          new (zone()) ZoneList<Expression*>(1, zone());
-      spread_list->Add(list->at(i++)->AsSpread()->expression(), zone());
-      args->Add(factory()->NewCallRuntime(Context::SPREAD_ITERABLE_INDEX,
-                                          spread_list, kNoSourcePosition),
-                zone());
-    }
-
-    list = new (zone()) ZoneList<Expression*>(1, zone());
-    list->Add(factory()->NewCallRuntime(Context::SPREAD_ARGUMENTS_INDEX, args,
-                                        kNoSourcePosition),
-              zone());
-    return list;
+  // The arguments of the spread call become a single ArrayLiteral.
+  int first_spread = 0;
+  for (; first_spread < list->length() && !list->at(first_spread)->IsSpread();
+       ++first_spread) {
   }
-  UNREACHABLE();
+
+  DCHECK_LT(first_spread, list->length());
+  return factory()->NewArrayLiteral(list, first_spread, kNoSourcePosition);
 }
 
 Expression* Parser::SpreadCall(Expression* function,
-                               ZoneList<Expression*>* args, int pos,
+                               ZoneList<Expression*>* args_list, int pos,
                                Call::PossiblyEval is_possibly_eval) {
   // Handle this case in BytecodeGenerator.
-  if (OnlyLastArgIsSpread(args)) {
-    return factory()->NewCall(function, args, pos);
+  if (OnlyLastArgIsSpread(args_list)) {
+    return factory()->NewCall(function, args_list, pos);
   }
 
   if (function->IsSuperCallReference()) {
     // Super calls
     // $super_constructor = %_GetSuperConstructor(<this-function>)
     // %reflect_construct($super_constructor, args, new.target)
-
-    args = PrepareSpreadArguments(args);
+    ZoneList<Expression*>* args = new (zone()) ZoneList<Expression*>(3, zone());
     ZoneList<Expression*>* tmp = new (zone()) ZoneList<Expression*>(1, zone());
     tmp->Add(function->AsSuperCallReference()->this_function_var(), zone());
-    Expression* super_constructor = factory()->NewCallRuntime(
-        Runtime::kInlineGetSuperConstructor, tmp, pos);
-    args->InsertAt(0, super_constructor, zone());
+    args->Add(factory()->NewCallRuntime(Runtime::kInlineGetSuperConstructor,
+                                        tmp, pos),
+              zone());
+    args->Add(ArrayLiteralFromListWithSpread(args_list), zone());
     args->Add(function->AsSuperCallReference()->new_target_var(), zone());
     return factory()->NewCallRuntime(Context::REFLECT_CONSTRUCT_INDEX, args,
                                      pos);
   } else {
-    args = PrepareSpreadArguments(args);
+    ZoneList<Expression*>* args = new (zone()) ZoneList<Expression*>(3, zone());
     if (function->IsProperty()) {
       // Method calls
       if (function->AsProperty()->IsSuperAccess()) {
         Expression* home = ThisExpression(kNoSourcePosition);
-        args->InsertAt(0, function, zone());
-        args->InsertAt(1, home, zone());
+        args->Add(function, zone());
+        args->Add(home, zone());
       } else {
         Variable* temp = NewTemporary(ast_value_factory()->empty_string());
         VariableProxy* obj = factory()->NewVariableProxy(temp);
@@ -3796,28 +3577,29 @@ Expression* Parser::SpreadCall(Expression* function,
             kNoSourcePosition);
         function = factory()->NewProperty(
             assign_obj, function->AsProperty()->key(), kNoSourcePosition);
-        args->InsertAt(0, function, zone());
+        args->Add(function, zone());
         obj = factory()->NewVariableProxy(temp);
-        args->InsertAt(1, obj, zone());
+        args->Add(obj, zone());
       }
     } else {
       // Non-method calls
-      args->InsertAt(0, function, zone());
-      args->InsertAt(1, factory()->NewUndefinedLiteral(kNoSourcePosition),
-                     zone());
+      args->Add(function, zone());
+      args->Add(factory()->NewUndefinedLiteral(kNoSourcePosition), zone());
     }
+    args->Add(ArrayLiteralFromListWithSpread(args_list), zone());
     return factory()->NewCallRuntime(Context::REFLECT_APPLY_INDEX, args, pos);
   }
 }
 
 Expression* Parser::SpreadCallNew(Expression* function,
-                                  ZoneList<Expression*>* args, int pos) {
-  if (OnlyLastArgIsSpread(args)) {
+                                  ZoneList<Expression*>* args_list, int pos) {
+  if (OnlyLastArgIsSpread(args_list)) {
     // Handle in BytecodeGenerator.
-    return factory()->NewCallNew(function, args, pos);
+    return factory()->NewCallNew(function, args_list, pos);
   }
-  args = PrepareSpreadArguments(args);
-  args->InsertAt(0, function, zone());
+  ZoneList<Expression*>* args = new (zone()) ZoneList<Expression*>(2, zone());
+  args->Add(function, zone());
+  args->Add(ArrayLiteralFromListWithSpread(args_list), zone());
 
   return factory()->NewCallRuntime(Context::REFLECT_CONSTRUCT_INDEX, args, pos);
 }
@@ -3884,6 +3666,9 @@ void Parser::RewriteDestructuringAssignments() {
       // pair.scope may already have been removed by FinalizeBlockScope in the
       // meantime.
       Scope* scope = to_rewrite->scope()->GetUnremovedScope();
+      // Scope at the time of the rewriting and the original parsing
+      // should be in the same function.
+      DCHECK(scope->GetClosureScope() == scope_->GetClosureScope());
       BlockState block_state(&scope_, scope);
       RewriteDestructuringAssignment(to_rewrite);
     }

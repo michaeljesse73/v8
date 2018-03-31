@@ -968,7 +968,7 @@ void DisassemblingDecoder::VisitFPCompare(Instruction* instr) {
 
   switch (instr->Mask(FPCompareMask)) {
     case FCMP_s_zero:
-    case FCMP_d_zero: form = form_zero;  // Fall through.
+    case FCMP_d_zero: form = form_zero; V8_FALLTHROUGH;
     case FCMP_s:
     case FCMP_d: mnemonic = "fcmp"; break;
     default: form = "(FPCompare)";
@@ -1243,6 +1243,11 @@ void DisassemblingDecoder::VisitSystem(Instruction* instr) {
     switch (instr->ImmHint()) {
       case NOP: {
         mnemonic = "nop";
+        form = nullptr;
+        break;
+      }
+      case CSDB: {
+        mnemonic = "csdb";
         form = nullptr;
         break;
       }
@@ -3713,6 +3718,8 @@ int DisassemblingDecoder::SubstituteImmediateField(Instruction* instr,
             }
             return 0;
           }
+          UNIMPLEMENTED();
+          return 0;
         }
         case 'L': {  // IVLSLane[0123] - suffix indicates access size shift.
           AppendToOutput("%d", instr->NEONLSIndex(format[8] - '0'));
@@ -3836,7 +3843,8 @@ int DisassemblingDecoder::SubstituteShiftField(Instruction* instr,
   switch (format[1]) {
     case 'D': {  // NDP.
       DCHECK(instr->ShiftDP() != ROR);
-    }  // Fall through.
+      V8_FALLTHROUGH;
+    }
     case 'L': {  // NLo.
       if (instr->ImmDPShift() != 0) {
         const char* shift_type[] = {"lsl", "lsr", "asr", "ror"};

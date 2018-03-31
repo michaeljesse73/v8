@@ -22,6 +22,8 @@
   V(await_string, "await")                                         \
   V(BigInt_string, "BigInt")                                       \
   V(bigint_string, "bigint")                                       \
+  V(BigInt64Array_string, "BigInt64Array")                         \
+  V(BigUint64Array_string, "BigUint64Array")                       \
   V(bind_string, "bind")                                           \
   V(Boolean_string, "Boolean")                                     \
   V(boolean_string, "boolean")                                     \
@@ -77,6 +79,7 @@
   V(Float64Array_string, "Float64Array")                           \
   V(fraction_string, "fraction")                                   \
   V(Function_string, "Function")                                   \
+  V(function_native_code_string, "function () { [native code] }")  \
   V(function_string, "function")                                   \
   V(function_to_string, "[object Function]")                       \
   V(Generator_string, "Generator")                                 \
@@ -158,6 +161,7 @@
   V(query_colon_string, "(?:)")                                    \
   V(RangeError_string, "RangeError")                               \
   V(raw_string, "raw")                                             \
+  V(ReconfigureToDataProperty_string, "ReconfigureToDataProperty") \
   V(ReferenceError_string, "ReferenceError")                       \
   V(RegExp_string, "RegExp")                                       \
   V(regexp_to_string, "[object RegExp]")                           \
@@ -197,8 +201,8 @@
   V(toJSON_string, "toJSON")                                       \
   V(toString_string, "toString")                                   \
   V(true_string, "true")                                           \
-  V(type_string, "type")                                           \
   V(TypeError_string, "TypeError")                                 \
+  V(type_string, "type")                                           \
   V(Uint16Array_string, "Uint16Array")                             \
   V(Uint32Array_string, "Uint32Array")                             \
   V(Uint8Array_string, "Uint8Array")                               \
@@ -306,6 +310,7 @@
   F(MC_CLEAR_WEAK_CELLS)                             \
   F(MC_CLEAR_WEAK_COLLECTIONS)                       \
   F(MC_CLEAR_WEAK_LISTS)                             \
+  F(MC_CLEAR_WEAK_REFERENCES)                        \
   F(MC_EPILOGUE)                                     \
   F(MC_EVACUATE)                                     \
   F(MC_EVACUATE_CANDIDATES)                          \

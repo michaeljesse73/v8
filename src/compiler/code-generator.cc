@@ -43,7 +43,7 @@ CodeGenerator::CodeGenerator(
     base::Optional<OsrHelper> osr_helper, int start_source_position,
     JumpOptimizationInfo* jump_opt,
     std::vector<trap_handler::ProtectedInstructionData>* protected_instructions,
-    LoadPoisoning load_poisoning)
+    PoisoningMitigationLevel poisoning_enabled)
     : zone_(codegen_zone),
       isolate_(isolate),
       frame_access_state_(nullptr),
@@ -64,6 +64,7 @@ CodeGenerator::CodeGenerator(
       deoptimization_literals_(zone()),
       inlined_function_count_(0),
       translations_(zone()),
+      handler_table_offset_(0),
       last_lazy_deopt_pc_(0),
       caller_registers_saved_(false),
       jump_tables_(nullptr),
@@ -74,7 +75,7 @@ CodeGenerator::CodeGenerator(
       source_position_table_builder_(info->SourcePositionRecordingMode()),
       protected_instructions_(protected_instructions),
       result_(kSuccess),
-      load_poisoning_(load_poisoning) {
+      poisoning_enabled_(poisoning_enabled) {
   for (int i = 0; i < code->InstructionBlockCount(); ++i) {
     new (&labels_[i]) Label;
   }
@@ -153,23 +154,21 @@ void CodeGenerator::AssembleCode() {
   // Check that {kJavaScriptCallCodeStartRegister} has been set correctly.
   if (FLAG_debug_code & (info->code_kind() == Code::OPTIMIZED_FUNCTION ||
                          info->code_kind() == Code::BYTECODE_HANDLER)) {
+    tasm()->RecordComment("-- Prologue: check code start register --");
     AssembleCodeStartRegisterCheck();
   }
 
-  if (info->is_speculation_poison_enabled()) {
-    GenerateSpeculationPoison();
-  } else {
-    InitializePoisonForLoadsIfNeeded();
-  }
-
-  // TODO(jupvfranco): This should be the first thing in the code after
-  // generating speculation poison, or otherwise MaybeCallEntryHookDelayed may
-  // happen twice (for optimized and deoptimized code). We want to bailout only
-  // from JS functions, which are the only ones that are optimized.
+  // TODO(jupvfranco): This should be the first thing in the code, otherwise
+  // MaybeCallEntryHookDelayed may happen twice (for optimized and deoptimized
+  // code). We want to bailout only from JS functions, which are the only ones
+  // that are optimized.
   if (info->IsOptimizing()) {
     DCHECK(linkage()->GetIncomingDescriptor()->IsJSFunctionCall());
+    tasm()->RecordComment("-- Prologue: check for deoptimization --");
     BailoutIfDeoptimized();
   }
+
+  InitializeSpeculationPoison();
 
   // Define deoptimization literals for all inlined functions.
   DCHECK_EQ(0u, deoptimization_literals_.size());
@@ -303,6 +302,17 @@ void CodeGenerator::AssembleCode() {
   unwinding_info_writer_.Finish(tasm()->pc_offset());
 
   safepoints()->Emit(tasm(), frame()->GetTotalFrameSlotCount());
+
+  // Emit the exception handler table.
+  if (!handlers_.empty()) {
+    handler_table_offset_ = HandlerTable::EmitReturnTableStart(
+        tasm(), static_cast<int>(handlers_.size()));
+    for (size_t i = 0; i < handlers_.size(); ++i) {
+      HandlerTable::EmitReturnEntry(tasm(), handlers_[i].pc_offset,
+                                    handlers_[i].handler->pos());
+    }
+  }
+
   result_ = kSuccess;
 }
 
@@ -342,37 +352,10 @@ Handle<ByteArray> CodeGenerator::GetSourcePositionTable() {
   return source_position_table_builder_.ToSourcePositionTable(isolate());
 }
 
-MaybeHandle<HandlerTable> CodeGenerator::GetHandlerTable() const {
-  if (!handlers_.empty()) {
-    Handle<HandlerTable> table =
-        Handle<HandlerTable>::cast(isolate()->factory()->NewFixedArray(
-            HandlerTable::LengthForReturn(static_cast<int>(handlers_.size())),
-            TENURED));
-    for (size_t i = 0; i < handlers_.size(); ++i) {
-      table->SetReturnOffset(static_cast<int>(i), handlers_[i].pc_offset);
-      table->SetReturnHandler(static_cast<int>(i), handlers_[i].handler->pos());
-    }
-    return table;
-  }
-  return {};
-}
-
 Handle<Code> CodeGenerator::FinalizeCode() {
   if (result_ != kSuccess) {
     tasm()->AbortedCodeGeneration();
     return Handle<Code>();
-  }
-
-  // Allocate exception handler table.
-  Handle<HandlerTable> table = HandlerTable::Empty(isolate());
-  if (!handlers_.empty()) {
-    table = Handle<HandlerTable>::cast(isolate()->factory()->NewFixedArray(
-        HandlerTable::LengthForReturn(static_cast<int>(handlers_.size())),
-        TENURED));
-    for (size_t i = 0; i < handlers_.size(); ++i) {
-      table->SetReturnOffset(static_cast<int>(i), handlers_[i].pc_offset);
-      table->SetReturnHandler(static_cast<int>(i), handlers_[i].handler->pos());
-    }
   }
 
   // Allocate the source position table.
@@ -391,8 +374,9 @@ Handle<Code> CodeGenerator::FinalizeCode() {
 
   Handle<Code> result = isolate()->factory()->NewCode(
       desc, info()->code_kind(), Handle<Object>(), info()->builtin_index(),
-      table, source_positions, deopt_data, kMovable, info()->stub_key(), true,
-      frame()->GetTotalFrameSlotCount(), safepoints()->GetCodeOffset());
+      source_positions, deopt_data, kMovable, info()->stub_key(), true,
+      frame()->GetTotalFrameSlotCount(), safepoints()->GetCodeOffset(),
+      handler_table_offset_);
   isolate()->counters()->total_compiled_code_size()->Increment(
       result->instruction_size());
 
@@ -684,7 +668,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleInstruction(
 
   // TODO(jarin) We should thread the flag through rather than set it.
   if (instr->IsCall()) {
-    InitializePoisonForLoadsIfNeeded();
+    ResetSpeculationPoison();
   }
 
   return kSuccess;
@@ -846,9 +830,9 @@ void CodeGenerator::RecordCallPosition(Instruction* instr) {
 
   if (needs_frame_state) {
     MarkLazyDeoptSite();
-    // If the frame state is present, it starts at argument 1 (just after the
-    // code address).
-    size_t frame_state_offset = 1;
+    // If the frame state is present, it starts at argument 2 - after
+    // the code address and the poison-alias index.
+    size_t frame_state_offset = 2;
     FrameStateDescriptor* descriptor =
         GetDeoptimizationEntry(instr, frame_state_offset).descriptor();
     int pc_offset = tasm()->pc_offset();
@@ -1195,8 +1179,25 @@ DeoptimizationExit* CodeGenerator::AddDeoptimizationExit(
   return exit;
 }
 
-void CodeGenerator::InitializePoisonForLoadsIfNeeded() {
-  if (load_poisoning_ == LoadPoisoning::kDoPoison) {
+void CodeGenerator::InitializeSpeculationPoison() {
+  if (poisoning_enabled_ == PoisoningMitigationLevel::kOff) return;
+
+  // Initialize {kSpeculationPoisonRegister} either by comparing the expected
+  // with the actual call target, or by unconditionally using {-1} initially.
+  // Masking register arguments with it only makes sense in the first case.
+  if (info()->called_with_code_start_register()) {
+    tasm()->RecordComment("-- Prologue: generate speculation poison --");
+    GenerateSpeculationPoisonFromCodeStartRegister();
+    if (info()->is_poisoning_register_arguments()) {
+      AssembleRegisterArgumentPoisoning();
+    }
+  } else {
+    ResetSpeculationPoison();
+  }
+}
+
+void CodeGenerator::ResetSpeculationPoison() {
+  if (poisoning_enabled_ != PoisoningMitigationLevel::kOff) {
     tasm()->ResetSpeculationPoisonRegister();
   }
 }

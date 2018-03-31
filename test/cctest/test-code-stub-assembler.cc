@@ -15,6 +15,7 @@
 #include "src/debug/debug.h"
 #include "src/isolate.h"
 #include "src/objects-inl.h"
+#include "src/objects/promise-inl.h"
 #include "test/cctest/compiler/code-assembler-tester.h"
 #include "test/cctest/compiler/function-tester.h"
 
@@ -212,7 +213,7 @@ TEST(LoadHeapNumberValue) {
   CodeAssemblerTester asm_tester(isolate);
   CodeStubAssembler m(asm_tester.state());
   Handle<HeapNumber> number = isolate->factory()->NewHeapNumber(1234);
-  m.Return(m.SmiFromWord32(m.Signed(
+  m.Return(m.SmiFromInt32(m.Signed(
       m.ChangeFloat64ToUint32(m.LoadHeapNumberValue(m.HeapConstant(number))))));
   FunctionTester ft(asm_tester.GenerateCode());
   MaybeHandle<Object> result = ft.Call();
@@ -224,7 +225,7 @@ TEST(LoadInstanceType) {
   CodeAssemblerTester asm_tester(isolate);
   CodeStubAssembler m(asm_tester.state());
   Handle<HeapObject> undefined = isolate->factory()->undefined_value();
-  m.Return(m.SmiFromWord32(m.LoadInstanceType(m.HeapConstant(undefined))));
+  m.Return(m.SmiFromInt32(m.LoadInstanceType(m.HeapConstant(undefined))));
   FunctionTester ft(asm_tester.GenerateCode());
   MaybeHandle<Object> result = ft.Call();
   CHECK_EQ(InstanceType::ODDBALL_TYPE,
@@ -252,8 +253,8 @@ TEST(JSFunction) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
-  m.Return(m.SmiFromWord32(m.Int32Add(m.SmiToWord32(m.Parameter(1)),
-                                      m.SmiToWord32(m.Parameter(2)))));
+  m.Return(m.SmiFromInt32(
+      m.Int32Add(m.SmiToInt32(m.Parameter(1)), m.SmiToInt32(m.Parameter(2)))));
 
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
 
@@ -268,8 +269,8 @@ TEST(ComputeIntegerHash) {
   const int kNumParams = 2;
   CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
-  m.Return(m.SmiFromWord32(m.ComputeIntegerHash(
-      m.SmiUntag(m.Parameter(0)), m.SmiToWord32(m.Parameter(1)))));
+  m.Return(m.SmiFromInt32(m.ComputeIntegerHash(m.SmiUntag(m.Parameter(0)),
+                                               m.SmiToInt32(m.Parameter(1)))));
 
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
 
@@ -2274,11 +2275,11 @@ TEST(AllocateFunctionWithMapAndContext) {
   Handle<JSFunction> fun = Handle<JSFunction>::cast(result_obj);
   CHECK_EQ(isolate->heap()->empty_property_array(), fun->property_array());
   CHECK_EQ(isolate->heap()->empty_fixed_array(), fun->elements());
-  CHECK_EQ(isolate->heap()->undefined_cell(), fun->feedback_vector_cell());
+  CHECK_EQ(isolate->heap()->many_closures_cell(), fun->feedback_cell());
   CHECK(!fun->has_prototype_slot());
   CHECK_EQ(*isolate->promise_capability_default_resolve_shared_fun(),
            fun->shared());
-  CHECK_EQ(isolate->promise_capability_default_resolve_shared_fun()->code(),
+  CHECK_EQ(isolate->promise_capability_default_resolve_shared_fun()->GetCode(),
            fun->code());
 }
 
@@ -2611,7 +2612,7 @@ TEST(LoadJSArrayElementsMap) {
     CodeStubAssembler m(asm_tester.state());
     Node* context = m.Parameter(kNumParams + 2);
     Node* native_context = m.LoadNativeContext(context);
-    Node* kind = m.SmiToWord32(m.Parameter(0));
+    Node* kind = m.SmiToInt32(m.Parameter(0));
     m.Return(m.LoadJSArrayElementsMap(kind, native_context));
   }
 
@@ -2670,7 +2671,7 @@ TEST(GotoIfNotWhiteSpaceOrLineTerminator) {
   {  // Returns true if whitespace, false otherwise.
     Label if_not_whitespace(&m);
 
-    m.GotoIfNotWhiteSpaceOrLineTerminator(m.SmiToWord32(m.Parameter(0)),
+    m.GotoIfNotWhiteSpaceOrLineTerminator(m.SmiToInt32(m.Parameter(0)),
                                           &if_not_whitespace);
     m.Return(m.TrueConstant());
 
@@ -2726,7 +2727,8 @@ TEST(IsNumberArrayIndex) {
   CodeAssemblerTester asm_tester(isolate, kNumParams);
   {
     CodeStubAssembler m(asm_tester.state());
-    m.Return(m.SmiFromWord32(m.IsNumberArrayIndex(m.Parameter(0))));
+    m.Return(m.SmiFromInt32(
+        m.UncheckedCast<Int32T>(m.IsNumberArrayIndex(m.Parameter(0)))));
   }
 
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
@@ -3086,6 +3088,32 @@ TEST(ExtractFixedArraySimpleIntPtrParameters) {
   CHECK_EQ(2, double_result->length());
   CHECK_EQ(double_result->get_scalar(0), 11);
   CHECK_EQ(double_result->get_scalar(1), 12);
+}
+
+TEST(SingleInputPhiElimination) {
+  Isolate* isolate(CcTest::InitIsolateOnce());
+  const int kNumParams = 2;
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
+  {
+    CodeStubAssembler m(asm_tester.state());
+    Variable temp1(&m, MachineRepresentation::kTagged);
+    Variable temp2(&m, MachineRepresentation::kTagged);
+    Label temp_label(&m, {&temp1, &temp2});
+    Label end_label(&m, {&temp1, &temp2});
+    temp1.Bind(m.Parameter(1));
+    temp2.Bind(m.Parameter(1));
+    m.Branch(m.WordEqual(m.Parameter(0), m.Parameter(1)), &end_label,
+             &temp_label);
+    temp1.Bind(m.Parameter(2));
+    temp2.Bind(m.Parameter(2));
+    m.BIND(&temp_label);
+    m.Goto(&end_label);
+    m.BIND(&end_label);
+    m.Return(temp1.value());
+  }
+  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+  // Generating code without an assert is enough to make sure that the
+  // single-input phi is properly eliminated.
 }
 
 }  // namespace compiler

@@ -10,6 +10,7 @@
 #include "src/profiler/cpu-profiler.h"
 #include "src/profiler/profile-generator-inl.h"
 #include "src/source-position-table.h"
+#include "src/wasm/wasm-code-manager.h"
 
 namespace v8 {
 namespace internal {
@@ -111,6 +112,24 @@ void ProfilerListener::CodeCreateEvent(CodeEventListener::LogEventsAndTags tag,
   DispatchCodeEvent(evt_rec);
 }
 
+void ProfilerListener::CodeCreateEvent(CodeEventListener::LogEventsAndTags tag,
+                                       const wasm::WasmCode* code,
+                                       wasm::WasmName name) {
+  CodeEventsContainer evt_rec(CodeEventRecord::CODE_CREATION);
+  CodeCreateEventRecord* rec = &evt_rec.CodeCreateEventRecord_;
+  rec->start = code->instructions().start();
+  // TODO(herhut): Instead of sanitizing here, make sure all wasm functions
+  //               have names.
+  const char* name_ptr =
+      name.start() == nullptr ? "<anonymous>" : GetFunctionName(name.start());
+  rec->entry = NewCodeEntry(
+      tag, name_ptr, CodeEntry::kEmptyNamePrefix, CodeEntry::kEmptyResourceName,
+      CpuProfileNode::kNoLineNumberInfo, CpuProfileNode::kNoColumnNumberInfo,
+      nullptr, code->instructions().start());
+  rec->size = code->instructions().length();
+  DispatchCodeEvent(evt_rec);
+}
+
 void ProfilerListener::CodeMoveEvent(AbstractCode* from, Address to) {
   CodeEventsContainer evt_rec(CodeEventRecord::CODE_MOVE);
   CodeMoveEventRecord* rec = &evt_rec.CodeMoveEventRecord_;
@@ -162,20 +181,6 @@ void ProfilerListener::RegExpCodeCreateEvent(AbstractCode* code,
                             CpuProfileNode::kNoColumnNumberInfo, nullptr,
                             code->instruction_start());
   rec->size = code->ExecutableSize();
-  DispatchCodeEvent(evt_rec);
-}
-
-void ProfilerListener::InstructionStreamCreateEvent(
-    CodeEventListener::LogEventsAndTags tag, const InstructionStream* stream,
-    const char* description) {
-  CodeEventsContainer evt_rec(CodeEventRecord::CODE_CREATION);
-  CodeCreateEventRecord* rec = &evt_rec.CodeCreateEventRecord_;
-  rec->start = stream->bytes();
-  rec->entry = NewCodeEntry(
-      tag, description, CodeEntry::kEmptyNamePrefix,
-      CodeEntry::kEmptyResourceName, CpuProfileNode::kNoLineNumberInfo,
-      CpuProfileNode::kNoColumnNumberInfo, nullptr, stream->bytes());
-  rec->size = static_cast<unsigned>(stream->byte_length());
   DispatchCodeEvent(evt_rec);
 }
 

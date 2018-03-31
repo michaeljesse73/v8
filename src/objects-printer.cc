@@ -13,6 +13,8 @@
 #include "src/interpreter/bytecodes.h"
 #include "src/objects-inl.h"
 #include "src/objects/debug-objects-inl.h"
+#include "src/objects/microtask-inl.h"
+#include "src/objects/promise-inl.h"
 #include "src/ostreams.h"
 #include "src/regexp/jsregexp.h"
 #include "src/transitions-inl.h"
@@ -89,7 +91,19 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
       break;
     case HASH_TABLE_TYPE:
     case FIXED_ARRAY_TYPE:
+    case BLOCK_CONTEXT_TYPE:
+    case CATCH_CONTEXT_TYPE:
+    case DEBUG_EVALUATE_CONTEXT_TYPE:
+    case EVAL_CONTEXT_TYPE:
+    case FUNCTION_CONTEXT_TYPE:
+    case MODULE_CONTEXT_TYPE:
+    case NATIVE_CONTEXT_TYPE:
+    case SCRIPT_CONTEXT_TYPE:
+    case WITH_CONTEXT_TYPE:
       FixedArray::cast(this)->FixedArrayPrint(os);
+      break;
+    case BOILERPLATE_DESCRIPTION_TYPE:
+      BoilerplateDescription::cast(this)->BoilerplateDescriptionPrint(os);
       break;
     case PROPERTY_ARRAY_TYPE:
       PropertyArray::cast(this)->PropertyArrayPrint(os);
@@ -106,6 +120,9 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
     case TRANSITION_ARRAY_TYPE:
       TransitionArray::cast(this)->TransitionArrayPrint(os);
       break;
+    case FEEDBACK_CELL_TYPE:
+      FeedbackCell::cast(this)->FeedbackCellPrint(os);
+      break;
     case FEEDBACK_VECTOR_TYPE:
       FeedbackVector::cast(this)->FeedbackVectorPrint(os);
       break;
@@ -120,12 +137,6 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
 
     TYPED_ARRAYS(PRINT_FIXED_TYPED_ARRAY)
 #undef PRINT_FIXED_TYPED_ARRAY
-
-#define ARRAY_ITERATOR_CASE(type) case type:
-    ARRAY_ITERATOR_TYPE_LIST(ARRAY_ITERATOR_CASE)
-#undef ARRAY_ITERATOR_CASE
-    JSArrayIterator::cast(this)->JSArrayIteratorPrint(os);
-    break;
 
     case FILLER_TYPE:
       os << "filler";
@@ -228,6 +239,9 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
     case JS_ARRAY_BUFFER_TYPE:
       JSArrayBuffer::cast(this)->JSArrayBufferPrint(os);
       break;
+    case JS_ARRAY_ITERATOR_TYPE:
+      JSArrayIterator::cast(this)->JSArrayIteratorPrint(os);
+      break;
     case JS_TYPED_ARRAY_TYPE:
       JSTypedArray::cast(this)->JSTypedArrayPrint(os);
       break;
@@ -250,7 +264,9 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
     case SCOPE_INFO_TYPE:
       ScopeInfo::cast(this)->ScopeInfoPrint(os);
       break;
-
+    case FEEDBACK_METADATA_TYPE:
+      FeedbackMetadata::cast(this)->FeedbackMetadataPrint(os);
+      break;
     default:
       os << "UNKNOWN TYPE " << map()->instance_type();
       UNREACHABLE();
@@ -586,7 +602,12 @@ void Symbol::SymbolPrint(std::ostream& os) {  // NOLINT
 void Map::MapPrint(std::ostream& os) {  // NOLINT
   HeapObject::PrintHeader(os, "Map");
   os << "\n - type: " << instance_type();
-  os << "\n - instance size: " << instance_size();
+  os << "\n - instance size: ";
+  if (instance_size() == kVariableSizeSentinel) {
+    os << "variable";
+  } else {
+    os << instance_size();
+  }
   if (IsJSObjectMap()) {
     os << "\n - inobject properties: " << GetInObjectProperties();
   }
@@ -621,6 +642,7 @@ void Map::MapPrint(std::ostream& os) {  // NOLINT
   } else {
     os << "\n - back pointer: " << Brief(GetBackPointer());
   }
+  os << "\n - prototype_validity cell: " << Brief(prototype_validity_cell());
   os << "\n - instance descriptors " << (owns_descriptors() ? "(own) " : "")
      << "#" << NumberOfOwnDescriptors() << ": "
      << Brief(instance_descriptors());
@@ -652,12 +674,23 @@ void AliasedArgumentsEntry::AliasedArgumentsEntryPrint(
   os << "\n - aliased_context_slot: " << aliased_context_slot();
 }
 
+namespace {
+void PrintFixedArrayWithHeader(std::ostream& os, FixedArray* array,
+                               const char* type) {
+  array->PrintHeader(os, type);
+  os << "\n - length: " << array->length();
+  PrintFixedArrayElements(os, array);
+  os << "\n";
+}
+}  // namespace
 
 void FixedArray::FixedArrayPrint(std::ostream& os) {  // NOLINT
-  HeapObject::PrintHeader(os, IsHashTable() ? "HashTable" : "FixedArray");
-  os << "\n - length: " << length();
-  PrintFixedArrayElements(os, this);
-  os << "\n";
+  PrintFixedArrayWithHeader(os, this,
+                            IsHashTable() ? "HashTable" : "FixedArray");
+}
+
+void BoilerplateDescription::BoilerplateDescriptionPrint(std::ostream& os) {
+  PrintFixedArrayWithHeader(os, this, "BoilerplateDescription");
 }
 
 void PropertyArray::PropertyArrayPrint(std::ostream& os) {  // NOLINT
@@ -684,6 +717,21 @@ void TransitionArray::TransitionArrayPrint(std::ostream& os) {  // NOLINT
     if (i == kPrototypeTransitionsIndex) os << " (prototype transitions)";
     if (i == kTransitionLengthIndex) os << " (number of transitions)";
   }
+  os << "\n";
+}
+
+void FeedbackCell::FeedbackCellPrint(std::ostream& os) {  // NOLINT
+  HeapObject::PrintHeader(os, "FeedbackCell");
+  if (map() == GetHeap()->no_closures_cell_map()) {
+    os << "\n - no closures";
+  } else if (map() == GetHeap()->one_closure_cell_map()) {
+    os << "\n - one closure";
+  } else if (map() == GetHeap()->many_closures_cell_map()) {
+    os << "\n - many closures";
+  } else {
+    os << "\n - Invalid FeedbackCell map";
+  }
+  os << " - value: " << Brief(value());
   os << "\n";
 }
 
@@ -719,13 +767,8 @@ void FeedbackMetadata::Print() {
   os << std::flush;
 }
 
-void FeedbackMetadata::FeedbackMetadataPrint(std::ostream& os) {  // NOLINT
+void FeedbackMetadata::FeedbackMetadataPrint(std::ostream& os) {
   HeapObject::PrintHeader(os, "FeedbackMetadata");
-  os << "\n - length: " << length();
-  if (length() == 0) {
-    os << " (empty)\n";
-    return;
-  }
   os << "\n - slot_count: " << slot_count();
 
   FeedbackMetadataIterator iter(this);
@@ -824,7 +867,8 @@ void FeedbackNexus::Print(std::ostream& os) {  // NOLINT
     case FeedbackSlotKind::kStoreKeyedSloppy:
     case FeedbackSlotKind::kInstanceOf:
     case FeedbackSlotKind::kStoreDataPropertyInLiteral:
-    case FeedbackSlotKind::kStoreKeyedStrict: {
+    case FeedbackSlotKind::kStoreKeyedStrict:
+    case FeedbackSlotKind::kStoreInArrayLiteral: {
       os << ICState2String(StateFromFeedback());
       break;
     }
@@ -842,7 +886,6 @@ void FeedbackNexus::Print(std::ostream& os) {  // NOLINT
     }
     case FeedbackSlotKind::kCreateClosure:
     case FeedbackSlotKind::kLiteral:
-    case FeedbackSlotKind::kTemplateObject:
     case FeedbackSlotKind::kTypeProfile:
       break;
     case FeedbackSlotKind::kInvalid:
@@ -1004,7 +1047,7 @@ void JSArrayBuffer::JSArrayBufferPrint(std::ostream& os) {  // NOLINT
   if (is_neuterable()) os << "\n - neuterable";
   if (was_neutered()) os << "\n - neutered";
   if (is_shared()) os << "\n - shared";
-  if (has_guard_region()) os << "\n - has_guard_region";
+  if (is_wasm_memory()) os << "\n - is_wasm_memory";
   if (is_growable()) os << "\n - growable";
   JSObjectPrintBody(os, this, !was_neutered());
 }
@@ -1022,20 +1065,9 @@ void JSTypedArray::JSTypedArrayPrint(std::ostream& os) {  // NOLINT
 
 void JSArrayIterator::JSArrayIteratorPrint(std::ostream& os) {  // NOLING
   JSObjectPrintHeader(os, this, "JSArrayIterator");
-
-  InstanceType instance_type = map()->instance_type();
-  os << "\n - type: ";
-  if (instance_type <= LAST_ARRAY_KEY_ITERATOR_TYPE) {
-    os << "keys";
-  } else if (instance_type <= LAST_ARRAY_KEY_VALUE_ITERATOR_TYPE) {
-    os << "entries";
-  } else {
-    os << "values";
-  }
-
-  os << "\n - object: " << Brief(object());
-  os << "\n - index: " << Brief(index());
-
+  os << "\n - iterated_object: " << Brief(iterated_object());
+  os << "\n - next_index: " << Brief(next_index());
+  os << "\n - kind: " << kind();
   JSObjectPrintBody(os, this);
 }
 
@@ -1057,36 +1089,6 @@ void JSBoundFunction::JSBoundFunctionPrint(std::ostream& os) {  // NOLINT
   JSObjectPrintBody(os, this);
 }
 
-
-namespace {
-
-std::ostream& operator<<(std::ostream& os, FunctionKind kind) {
-  os << "[";
-  if (kind == FunctionKind::kNormalFunction) {
-    os << " NormalFunction";
-  } else {
-#define PRINT_FLAG(name)                                                  \
-  if (static_cast<int>(kind) & static_cast<int>(FunctionKind::k##name)) { \
-    os << " " << #name;                                                   \
-  }
-
-    PRINT_FLAG(ArrowFunction)
-    PRINT_FLAG(GeneratorFunction)
-    PRINT_FLAG(ConciseMethod)
-    PRINT_FLAG(DefaultConstructor)
-    PRINT_FLAG(DerivedConstructor)
-    PRINT_FLAG(BaseConstructor)
-    PRINT_FLAG(GetterFunction)
-    PRINT_FLAG(SetterFunction)
-    PRINT_FLAG(AsyncFunction)
-    PRINT_FLAG(Module)
-#undef PRINT_FLAG
-  }
-  return os << " ]";
-}
-
-}  // namespace
-
 void JSFunction::JSFunctionPrint(std::ostream& os) {  // NOLINT
   JSObjectPrintHeader(os, this, "Function");
   os << "\n - function prototype: ";
@@ -1103,14 +1105,14 @@ void JSFunction::JSFunctionPrint(std::ostream& os) {  // NOLINT
     os << "<no-prototype-slot>";
   }
   os << "\n - shared_info: " << Brief(shared());
-  os << "\n - name: " << Brief(shared()->name());
+  os << "\n - name: " << Brief(shared()->Name());
 
   // Print Builtin name for builtin functions
   int builtin_index = code()->builtin_index();
   if (builtin_index != -1 && !IsInterpreted()) {
     if (builtin_index == Builtins::kDeserializeLazy) {
-      if (shared()->HasLazyDeserializationBuiltinId()) {
-        builtin_index = shared()->lazy_deserialization_builtin_id();
+      if (shared()->HasBuiltinId()) {
+        builtin_index = shared()->builtin_id();
         os << "\n - builtin: " << GetIsolate()->builtins()->name(builtin_index)
            << "(lazy)";
       }
@@ -1141,7 +1143,7 @@ void JSFunction::JSFunctionPrint(std::ostream& os) {  // NOLINT
   shared()->PrintSourceCode(os);
   JSObjectPrintBody(os, this);
   os << "\n - feedback vector: ";
-  if (feedback_vector_cell()->value()->IsFeedbackVector()) {
+  if (has_feedback_vector()) {
     feedback_vector()->FeedbackVectorPrint(os);
   } else {
     os << "not available\n";
@@ -1152,8 +1154,8 @@ void SharedFunctionInfo::PrintSourceCode(std::ostream& os) {
   if (HasSourceCode()) {
     os << "\n - source code: ";
     String* source = String::cast(Script::cast(script())->source());
-    int start = start_position();
-    int length = end_position() - start;
+    int start = StartPosition();
+    int length = EndPosition() - start;
     std::unique_ptr<char[]> source_string = source->ToCString(
         DISALLOW_NULLS, FAST_STRING_TRAVERSAL, start, length, nullptr);
     os << source_string.get();
@@ -1163,10 +1165,13 @@ void SharedFunctionInfo::PrintSourceCode(std::ostream& os) {
 void SharedFunctionInfo::SharedFunctionInfoPrint(std::ostream& os) {  // NOLINT
   HeapObject::PrintHeader(os, "SharedFunctionInfo");
   os << "\n - name: ";
-  if (has_shared_name()) {
-    os << Brief(raw_name());
+  if (HasSharedName()) {
+    os << Brief(Name());
   } else {
     os << "<no-shared-name>";
+  }
+  if (HasInferredName()) {
+    os << "\n - inferred name: " << Brief(inferred_name());
   }
   os << "\n - kind: " << kind();
   if (needs_home_object()) {
@@ -1176,13 +1181,8 @@ void SharedFunctionInfo::SharedFunctionInfoPrint(std::ostream& os) {  // NOLINT
   os << "\n - formal_parameter_count: " << internal_formal_parameter_count();
   os << "\n - expected_nof_properties: " << expected_nof_properties();
   os << "\n - language_mode: " << language_mode();
-  os << " - code: " << Brief(code());
-  if (HasBytecodeArray()) {
-    os << "\n - bytecode_array: " << bytecode_array();
-  }
-  if (HasAsmWasmData()) {
-    os << "\n - asm_wasm_data: " << Brief(asm_wasm_data());
-  }
+  os << "\n - data: " << Brief(function_data());
+  os << "\n - code (from data): " << Brief(GetCode());
   PrintSourceCode(os);
   // Script files are often large, hard to read.
   // os << "\n - script =";
@@ -1195,8 +1195,8 @@ void SharedFunctionInfo::SharedFunctionInfoPrint(std::ostream& os) {  // NOLINT
     os << "\n - declaration";
   }
   os << "\n - function token position: " << function_token_position();
-  os << "\n - start position: " << start_position();
-  os << "\n - end position: " << end_position();
+  os << "\n - start position: " << StartPosition();
+  os << "\n - end position: " << EndPosition();
   if (HasDebugInfo()) {
     os << "\n - debug info: " << Brief(debug_info());
   } else {
@@ -1206,11 +1206,6 @@ void SharedFunctionInfo::SharedFunctionInfoPrint(std::ostream& os) {  // NOLINT
   os << "\n - length: " << length();
   os << "\n - feedback_metadata: ";
   feedback_metadata()->FeedbackMetadataPrint(os);
-  if (HasPreParsedScopeData()) {
-    os << "\n - preparsed scope data: " << preparsed_scope_data();
-  } else {
-    os << "\n - no preparsed scope data";
-  }
   os << "\n";
 }
 
@@ -1454,7 +1449,6 @@ void PrototypeInfo::PrototypeInfoPrint(std::ostream& os) {  // NOLINT
   os << "\n - weak cell: " << Brief(weak_cell());
   os << "\n - prototype users: " << Brief(prototype_users());
   os << "\n - registry slot: " << registry_slot();
-  os << "\n - validity cell: " << Brief(validity_cell());
   os << "\n - object create map: " << Brief(object_create_map());
   os << "\n - should_be_fast_map: " << should_be_fast_map();
   os << "\n";
@@ -1472,6 +1466,25 @@ void Tuple3::Tuple3Print(std::ostream& os) {  // NOLINT
   os << "\n - value1: " << Brief(value1());
   os << "\n - value2: " << Brief(value2());
   os << "\n - value3: " << Brief(value3());
+  os << "\n";
+}
+
+void WasmCompiledModule::WasmCompiledModulePrint(std::ostream& os) {  // NOLINT
+  HeapObject::PrintHeader(os, "WasmCompiledModule");
+  os << "\n - shared: " << Brief(shared());
+  os << "\n";
+}
+
+void WasmDebugInfo::WasmDebugInfoPrint(std::ostream& os) {  // NOLINT
+  HeapObject::PrintHeader(os, "WasmDebugInfo");
+  os << "\n - wasm_instance: " << Brief(wasm_instance());
+  os << "\n";
+}
+
+void WasmSharedModuleData::WasmSharedModuleDataPrint(
+    std::ostream& os) {  // NOLINT
+  HeapObject::PrintHeader(os, "WasmSharedModuleData");
+  os << "\n - module: " << module();
   os << "\n";
 }
 
@@ -1667,7 +1680,7 @@ void PrintScopeInfoList(ScopeInfo* scope_info, std::ostream& os,
 void ScopeInfo::ScopeInfoPrint(std::ostream& os) {  // NOLINT
   HeapObject::PrintHeader(os, "ScopeInfo");
   if (length() == 0) {
-    os << "\n - length = 0";
+    os << "\n - length = 0\n";
     return;
   }
 
@@ -1683,6 +1696,10 @@ void ScopeInfo::ScopeInfoPrint(std::ostream& os) {  // NOLINT
   if (HasFunctionName()) {
     os << "\n - function name: ";
     FunctionName()->ShortPrint(os);
+  }
+  if (HasPositionInfo()) {
+    os << "\n - start position: " << StartPosition();
+    os << "\n - end position: " << EndPosition();
   }
   os << "\n - length: " << length();
   if (length() > 0) {

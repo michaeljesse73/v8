@@ -260,28 +260,28 @@ Condition FlagsConditionToCondition(FlagsCondition condition, ArchOpcode op) {
       // unsigned number never less than 0
       if (op == kS390_LoadAndTestWord32 || op == kS390_LoadAndTestWord64)
         return CC_NOP;
-    // fall through
+    V8_FALLTHROUGH;
     case kSignedLessThan:
       return lt;
     case kUnsignedGreaterThanOrEqual:
       // unsigned number always greater than or equal 0
       if (op == kS390_LoadAndTestWord32 || op == kS390_LoadAndTestWord64)
         return CC_ALWAYS;
-    // fall through
+    V8_FALLTHROUGH;
     case kSignedGreaterThanOrEqual:
       return ge;
     case kUnsignedLessThanOrEqual:
       // unsigned number never less than 0
       if (op == kS390_LoadAndTestWord32 || op == kS390_LoadAndTestWord64)
         return CC_EQ;
-    // fall through
+    V8_FALLTHROUGH;
     case kSignedLessThanOrEqual:
       return le;
     case kUnsignedGreaterThan:
       // unsigned number always greater than or equal 0
       if (op == kS390_LoadAndTestWord32 || op == kS390_LoadAndTestWord64)
         return ne;
-    // fall through
+    V8_FALLTHROUGH;
     case kSignedGreaterThan:
       return gt;
     case kOverflow:
@@ -984,6 +984,16 @@ void AdjustStackPointerForTailCall(
   }
 }
 
+void EmitWordLoadPoisoningIfNeeded(CodeGenerator* codegen, Instruction* instr,
+                                   S390OperandConverter& i) {
+  const MemoryAccessMode access_mode =
+      static_cast<MemoryAccessMode>(MiscField::decode(instr->opcode()));
+  if (access_mode == kMemoryAccessPoisoned) {
+    Register value = i.OutputRegister();
+    codegen->tasm()->AndP(value, kSpeculationPoisonRegister);
+  }
+}
+
 }  // namespace
 
 void CodeGenerator::AssembleTailCallBeforeGap(Instruction* instr,
@@ -1030,24 +1040,31 @@ void CodeGenerator::AssembleTailCallAfterGap(Instruction* instr,
 
 // Check that {kJavaScriptCallCodeStartRegister} is correct.
 void CodeGenerator::AssembleCodeStartRegisterCheck() {
-  // TODO(mstarzinger): Implement me.
+  Register scratch = r1;
+  int pc_offset = __ pc_offset();
+  __ larl(scratch, Operand(-pc_offset/2));
+  __ CmpP(scratch, kJavaScriptCallCodeStartRegister);
+  __ Assert(eq, AbortReason::kWrongFunctionCodeStart);
 }
 
 // Check if the code object is marked for deoptimization. If it is, then it
 // jumps to the CompileLazyDeoptimizedCode builtin. In order to do this we need
 // to:
-//    1. load the address of the current instruction;
-//    2. read from memory the word that contains that bit, which can be found in
+//    1. read from memory the word that contains that bit, which can be found in
 //       the flags in the referenced {CodeDataContainer} object;
-//    3. test kMarkedForDeoptimizationBit in those flags; and
-//    4. if it is not zero then it jumps to the builtin.
+//    2. test kMarkedForDeoptimizationBit in those flags; and
+//    3. if it is not zero then it jumps to the builtin.
 void CodeGenerator::BailoutIfDeoptimized() {
-  Label current;
-  __ larl(r1, &current);
-  int pc_offset = __ pc_offset();
-  __ bind(&current);
-  int offset = Code::kCodeDataContainerOffset - (Code::kHeaderSize + pc_offset);
-  __ LoadP(ip, MemOperand(r1, offset));
+  if (FLAG_debug_code) {
+    // Check that {kJavaScriptCallCodeStartRegister} is correct.
+    int pc_offset = __ pc_offset();
+    __ larl(ip, Operand(-pc_offset/2));
+    __ CmpP(ip, kJavaScriptCallCodeStartRegister);
+    __ Assert(eq, AbortReason::kWrongFunctionCodeStart);
+  }
+
+  int offset = Code::kCodeDataContainerOffset - Code::kHeaderSize;
+  __ LoadP(ip, MemOperand(kJavaScriptCallCodeStartRegister, offset));
   __ LoadW(ip,
            FieldMemOperand(ip, CodeDataContainer::kKindSpecificFlagsOffset));
   __ TestBit(ip, Code::kMarkedForDeoptimizationBit);
@@ -1056,7 +1073,7 @@ void CodeGenerator::BailoutIfDeoptimized() {
   __ Jump(code, RelocInfo::CODE_TARGET, ne);
 }
 
-void CodeGenerator::GenerateSpeculationPoison() {
+void CodeGenerator::GenerateSpeculationPoisonFromCodeStartRegister() {
   Register scratch = r1;
 
   Label current_pc;
@@ -1067,18 +1084,16 @@ void CodeGenerator::GenerateSpeculationPoison() {
 
   // Calculate a mask which has all bits set in the normal case, but has all
   // bits cleared if we are speculatively executing the wrong PC.
-  //    difference = (current - expected) | (expected - current)
-  //    poison = ~(difference >> (kBitsPerPointer - 1))
-  __ LoadRR(kSpeculationPoisonRegister, scratch);
-  __ SubP(kSpeculationPoisonRegister, kSpeculationPoisonRegister,
-          kJavaScriptCallCodeStartRegister);
-  __ SubP(kJavaScriptCallCodeStartRegister, kJavaScriptCallCodeStartRegister,
-          scratch);
-  __ OrP(kSpeculationPoisonRegister, kSpeculationPoisonRegister,
-         kJavaScriptCallCodeStartRegister);
-  __ ShiftRightArithP(kSpeculationPoisonRegister, kSpeculationPoisonRegister,
-                      Operand(kBitsPerPointer - 1));
-  __ NotP(kSpeculationPoisonRegister, kSpeculationPoisonRegister);
+  __ LoadImmP(kSpeculationPoisonRegister, Operand::Zero());
+  __ LoadImmP(r0, Operand(-1));
+  __ CmpP(kJavaScriptCallCodeStartRegister, scratch);
+  __ LoadOnConditionP(eq, kSpeculationPoisonRegister, r0);
+}
+
+void CodeGenerator::AssembleRegisterArgumentPoisoning() {
+  __ AndP(kJSFunctionRegister, kJSFunctionRegister, kSpeculationPoisonRegister);
+  __ AndP(kContextRegister, kContextRegister, kSpeculationPoisonRegister);
+  __ AndP(sp, sp, kSpeculationPoisonRegister);
 }
 
 // Assembles an instruction after register allocation, producing machine code.
@@ -1185,9 +1200,10 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
         __ CmpP(cp, kScratchReg);
         __ Assert(eq, AbortReason::kWrongFunctionContext);
       }
-      __ LoadP(ip, FieldMemOperand(func, JSFunction::kCodeOffset));
-      __ AddP(ip, ip, Operand(Code::kHeaderSize - kHeapObjectTag));
-      __ Call(ip);
+      static_assert(kJavaScriptCallCodeStartRegister == r4, "ABI mismatch");
+      __ LoadP(r4, FieldMemOperand(func, JSFunction::kCodeOffset));
+      __ AddP(r4, r4, Operand(Code::kHeaderSize - kHeapObjectTag));
+      __ Call(r4);
       RecordCallPosition(instr);
       frame_access_state()->ClearSPDelta();
       break;
@@ -1309,6 +1325,9 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
         __ LoadRR(i.OutputRegister(), fp);
       }
       break;
+    case kArchRootsPointer:
+      __ LoadRR(i.OutputRegister(), kRootRegister);
+      break;
     case kArchTruncateDoubleToI:
       // TODO(mbrandy): move slow call to stub out of line.
       __ TruncateDoubleToIDelayed(zone(), i.OutputRegister(),
@@ -1350,6 +1369,10 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
               Operand(offset.offset()));
       break;
     }
+    case kArchPoisonOnSpeculationWord:
+      DCHECK_EQ(i.OutputRegister(), i.InputRegister(0));
+      __ AndP(i.InputRegister(0), kSpeculationPoisonRegister);
+      break;
     case kS390_Abs32:
       // TODO(john.yan): zero-ext
       __ lpr(i.OutputRegister(0), i.InputRegister(0));
@@ -2142,6 +2165,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       break;
     case kS390_LoadWordS8:
       ASSEMBLE_LOAD_INTEGER(LoadB);
+      EmitWordLoadPoisoningIfNeeded(this, instr, i);
       break;
     case kS390_BitcastFloat32ToInt32:
       ASSEMBLE_UNARY_OP(R_DInstr(MovFloatToInt), R_MInstr(LoadlW), nullInstr);
@@ -2159,27 +2183,35 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
 #endif
     case kS390_LoadWordU8:
       ASSEMBLE_LOAD_INTEGER(LoadlB);
+      EmitWordLoadPoisoningIfNeeded(this, instr, i);
       break;
     case kS390_LoadWordU16:
       ASSEMBLE_LOAD_INTEGER(LoadLogicalHalfWordP);
+      EmitWordLoadPoisoningIfNeeded(this, instr, i);
       break;
     case kS390_LoadWordS16:
       ASSEMBLE_LOAD_INTEGER(LoadHalfWordP);
+      EmitWordLoadPoisoningIfNeeded(this, instr, i);
       break;
     case kS390_LoadWordU32:
       ASSEMBLE_LOAD_INTEGER(LoadlW);
+      EmitWordLoadPoisoningIfNeeded(this, instr, i);
       break;
     case kS390_LoadWordS32:
       ASSEMBLE_LOAD_INTEGER(LoadW);
+      EmitWordLoadPoisoningIfNeeded(this, instr, i);
       break;
     case kS390_LoadReverse16:
       ASSEMBLE_LOAD_INTEGER(lrvh);
+      EmitWordLoadPoisoningIfNeeded(this, instr, i);
       break;
     case kS390_LoadReverse32:
       ASSEMBLE_LOAD_INTEGER(lrv);
+      EmitWordLoadPoisoningIfNeeded(this, instr, i);
       break;
     case kS390_LoadReverse64:
       ASSEMBLE_LOAD_INTEGER(lrvg);
+      EmitWordLoadPoisoningIfNeeded(this, instr, i);
       break;
     case kS390_LoadReverse16RR:
       __ lrvr(i.OutputRegister(), i.InputRegister(0));
@@ -2193,6 +2225,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       break;
     case kS390_LoadWord64:
       ASSEMBLE_LOAD_INTEGER(lg);
+      EmitWordLoadPoisoningIfNeeded(this, instr, i);
       break;
     case kS390_LoadAndTestWord32: {
       ASSEMBLE_LOADANDTEST32(ltr, lt_z);
@@ -2240,28 +2273,28 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kS390_Lay:
       __ lay(i.OutputRegister(), i.MemoryOperand());
       break;
-    case kAtomicLoadInt8:
+    case kWord32AtomicLoadInt8:
       __ LoadB(i.OutputRegister(), i.MemoryOperand());
       break;
-    case kAtomicLoadUint8:
+    case kWord32AtomicLoadUint8:
       __ LoadlB(i.OutputRegister(), i.MemoryOperand());
       break;
-    case kAtomicLoadInt16:
+    case kWord32AtomicLoadInt16:
       __ LoadHalfWordP(i.OutputRegister(), i.MemoryOperand());
       break;
-    case kAtomicLoadUint16:
+    case kWord32AtomicLoadUint16:
       __ LoadLogicalHalfWordP(i.OutputRegister(), i.MemoryOperand());
       break;
-    case kAtomicLoadWord32:
+    case kWord32AtomicLoadWord32:
       __ LoadlW(i.OutputRegister(), i.MemoryOperand());
       break;
-    case kAtomicStoreWord8:
+    case kWord32AtomicStoreWord8:
       __ StoreByte(i.InputRegister(0), i.MemoryOperand(nullptr, 1));
       break;
-    case kAtomicStoreWord16:
+    case kWord32AtomicStoreWord16:
       __ StoreHalfWord(i.InputRegister(0), i.MemoryOperand(nullptr, 1));
       break;
-    case kAtomicStoreWord32:
+    case kWord32AtomicStoreWord32:
       __ StoreW(i.InputRegister(0), i.MemoryOperand(nullptr, 1));
       break;
 //         0x aa bb cc dd
@@ -2317,8 +2350,8 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     ATOMIC_EXCHANGE(start, end, shift_amount, -idx * 2);         \
   }
 #endif
-    case kAtomicExchangeInt8:
-    case kAtomicExchangeUint8: {
+    case kWord32AtomicExchangeInt8:
+    case kWord32AtomicExchangeUint8: {
       Register base = i.InputRegister(0);
       Register index = i.InputRegister(1);
       Register value = i.InputRegister(2);
@@ -2349,15 +2382,15 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       ATOMIC_EXCHANGE_BYTE(3);
 
       __ bind(&done);
-      if (opcode == kAtomicExchangeInt8) {
+      if (opcode == kWord32AtomicExchangeInt8) {
         __ lbr(output, output);
       } else {
         __ llcr(output, output);
       }
       break;
     }
-    case kAtomicExchangeInt16:
-    case kAtomicExchangeUint16: {
+    case kWord32AtomicExchangeInt16:
+    case kWord32AtomicExchangeUint16: {
       Register base = i.InputRegister(0);
       Register index = i.InputRegister(1);
       Register value = i.InputRegister(2);
@@ -2376,14 +2409,14 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       ATOMIC_EXCHANGE_HALFWORD(1);
 
       __ bind(&done);
-      if (opcode == kAtomicExchangeInt8) {
+      if (opcode == kWord32AtomicExchangeInt8) {
         __ lhr(output, output);
       } else {
         __ llhr(output, output);
       }
       break;
     }
-    case kAtomicExchangeWord32: {
+    case kWord32AtomicExchangeWord32: {
       Register base = i.InputRegister(0);
       Register index = i.InputRegister(1);
       Register value = i.InputRegister(2);
@@ -2427,7 +2460,15 @@ void CodeGenerator::AssembleArchBranch(Instruction* instr, BranchInfo* branch) {
 
 void CodeGenerator::AssembleBranchPoisoning(FlagsCondition condition,
                                             Instruction* instr) {
-  UNREACHABLE();
+  // TODO(John) Handle float comparisons (kUnordered[Not]Equal).
+  if (condition == kUnorderedEqual || condition == kUnorderedNotEqual) {
+    return;
+  }
+
+  condition = NegateFlagsCondition(condition);
+  __ LoadImmP(r0, Operand::Zero());
+  __ LoadOnConditionP(FlagsConditionToCondition(condition, kArchNop),
+                      kSpeculationPoisonRegister, r0);
 }
 
 void CodeGenerator::AssembleArchDeoptBranch(Instruction* instr,
@@ -2633,6 +2674,7 @@ void CodeGenerator::AssembleConstructFrame() {
     if (FLAG_code_comments) __ RecordComment("-- OSR entrypoint --");
     osr_pc_offset_ = __ pc_offset();
     shrink_slots -= osr_helper()->UnoptimizedFrameSlots();
+    ResetSpeculationPoison();
   }
 
   const RegList double_saves = call_descriptor->CalleeSavedFPRegisters();
@@ -2732,7 +2774,7 @@ void CodeGenerator::AssembleMove(InstructionOperand* source,
       switch (src.type()) {
         case Constant::kInt32:
 #if V8_TARGET_ARCH_S390X
-          if (RelocInfo::IsWasmSizeReference(src.rmode())) {
+          if (false) {
 #else
           if (RelocInfo::IsWasmReference(src.rmode())) {
 #endif
@@ -2746,7 +2788,6 @@ void CodeGenerator::AssembleMove(InstructionOperand* source,
           if (RelocInfo::IsWasmPtrReference(src.rmode())) {
             __ mov(dst, Operand(src.ToInt64(), src.rmode()));
           } else {
-            DCHECK(!RelocInfo::IsWasmSizeReference(src.rmode()));
             __ Load(dst, Operand(src.ToInt64()));
           }
 #else

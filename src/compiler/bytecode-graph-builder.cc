@@ -516,13 +516,12 @@ BytecodeGraphBuilder::BytecodeGraphBuilder(
     Handle<FeedbackVector> feedback_vector, BailoutId osr_offset,
     JSGraph* jsgraph, CallFrequency invocation_frequency,
     SourcePositionTable* source_positions, Handle<Context> native_context,
-    int inlining_id, JSTypeHintLowering::Flags flags, bool stack_check)
+    int inlining_id, JSTypeHintLowering::Flags flags, bool stack_check,
+    bool analyze_environment_liveness)
     : local_zone_(local_zone),
       jsgraph_(jsgraph),
       invocation_frequency_(invocation_frequency),
       bytecode_array_(handle(shared_info->bytecode_array())),
-      exception_handler_table_(
-          handle(HandlerTable::cast(bytecode_array()->handler_table()))),
       feedback_vector_(feedback_vector),
       type_hint_lowering_(jsgraph, feedback_vector, flags),
       frame_state_function_info_(common()->CreateFrameStateFunctionInfo(
@@ -535,6 +534,7 @@ BytecodeGraphBuilder::BytecodeGraphBuilder(
       osr_offset_(osr_offset),
       currently_peeled_loop_offset_(-1),
       stack_check_(stack_check),
+      analyze_environment_liveness_(analyze_environment_liveness),
       merge_environments_(local_zone),
       generator_merge_environments_(local_zone),
       exception_handlers_(local_zone),
@@ -545,7 +545,7 @@ BytecodeGraphBuilder::BytecodeGraphBuilder(
       exit_controls_(local_zone),
       state_values_cache_(jsgraph),
       source_positions_(source_positions),
-      start_position_(shared_info->start_position(), inlining_id),
+      start_position_(shared_info->StartPosition(), inlining_id),
       native_context_(native_context) {}
 
 Node* BytecodeGraphBuilder::GetFunctionClosure() {
@@ -871,7 +871,7 @@ void BytecodeGraphBuilder::VisitSingleBytecode(
 
 void BytecodeGraphBuilder::VisitBytecodes() {
   BytecodeAnalysis bytecode_analysis(bytecode_array(), local_zone(),
-                                     FLAG_analyze_environment_liveness);
+                                     analyze_environment_liveness());
   bytecode_analysis.Analyze(osr_offset_);
   set_bytecode_analysis(&bytecode_analysis);
 
@@ -880,7 +880,7 @@ void BytecodeGraphBuilder::VisitBytecodes() {
   SourcePositionTableIterator source_position_iterator(
       handle(bytecode_array()->SourcePositionTable()));
 
-  if (FLAG_trace_environment_liveness) {
+  if (analyze_environment_liveness() && FLAG_trace_environment_liveness) {
     OFStream of(stdout);
 
     bytecode_analysis.PrintLivenessTo(of);
@@ -1006,6 +1006,32 @@ void BytecodeGraphBuilder::VisitStaGlobal() {
       feedback.vector()->GetLanguageMode(feedback.slot());
   const Operator* op = javascript()->StoreGlobal(language_mode, name, feedback);
   Node* node = NewNode(op, value);
+  environment()->RecordAfterState(node, Environment::kAttachFrameState);
+}
+
+void BytecodeGraphBuilder::VisitStaInArrayLiteral() {
+  PrepareEagerCheckpoint();
+  Node* value = environment()->LookupAccumulator();
+  Node* array =
+      environment()->LookupRegister(bytecode_iterator().GetRegisterOperand(0));
+  Node* index =
+      environment()->LookupRegister(bytecode_iterator().GetRegisterOperand(1));
+  VectorSlotPair feedback =
+      CreateVectorSlotPair(bytecode_iterator().GetIndexOperand(2));
+  const Operator* op = javascript()->StoreInArrayLiteral(feedback);
+
+  JSTypeHintLowering::LoweringResult lowering =
+      TryBuildSimplifiedStoreKeyed(op, array, index, value, feedback.slot());
+  if (lowering.IsExit()) return;
+
+  Node* node = nullptr;
+  if (lowering.IsSideEffectFree()) {
+    node = lowering.value();
+  } else {
+    DCHECK(!lowering.Changed());
+    node = NewNode(op, array, index, value);
+  }
+
   environment()->RecordAfterState(node, Environment::kAttachFrameState);
 }
 
@@ -1437,14 +1463,17 @@ void BytecodeGraphBuilder::VisitPopContext() {
 void BytecodeGraphBuilder::VisitCreateClosure() {
   Handle<SharedFunctionInfo> shared_info = Handle<SharedFunctionInfo>::cast(
       bytecode_iterator().GetConstantForIndexOperand(0));
-  int const slot_id = bytecode_iterator().GetIndexOperand(1);
-  VectorSlotPair pair = CreateVectorSlotPair(slot_id);
+  FeedbackSlot slot = bytecode_iterator().GetSlotOperand(1);
+  FeedbackNexus nexus(feedback_vector(), slot);
   PretenureFlag tenured =
       interpreter::CreateClosureFlags::PretenuredBit::decode(
           bytecode_iterator().GetFlagOperand(2))
           ? TENURED
           : NOT_TENURED;
-  const Operator* op = javascript()->CreateClosure(shared_info, pair, tenured);
+  const Operator* op = javascript()->CreateClosure(
+      shared_info, nexus.GetFeedbackCell(),
+      handle(jsgraph()->isolate()->builtins()->builtin(Builtins::kCompileLazy)),
+      tenured);
   Node* closure = NewNode(op);
   environment()->BindAccumulator(closure);
 }
@@ -1861,14 +1890,21 @@ Node* BytecodeGraphBuilder::ProcessCallRuntimeArguments(
 
 void BytecodeGraphBuilder::VisitCallRuntime() {
   PrepareEagerCheckpoint();
-  Runtime::FunctionId functionId = bytecode_iterator().GetRuntimeIdOperand(0);
+  Runtime::FunctionId function_id = bytecode_iterator().GetRuntimeIdOperand(0);
   interpreter::Register receiver = bytecode_iterator().GetRegisterOperand(1);
   size_t reg_count = bytecode_iterator().GetRegisterCountOperand(2);
 
   // Create node to perform the runtime call.
-  const Operator* call = javascript()->CallRuntime(functionId, reg_count);
+  const Operator* call = javascript()->CallRuntime(function_id, reg_count);
   Node* value = ProcessCallRuntimeArguments(call, receiver, reg_count);
   environment()->BindAccumulator(value, Environment::kAttachFrameState);
+
+  // Connect to the end if {function_id} is non-returning.
+  if (Runtime::IsNonReturning(function_id)) {
+    // TODO(7099): Investigate if we need LoopExit node here.
+    Node* control = NewNode(common()->Throw());
+    MergeControlToLeaveFunction(control);
+  }
 }
 
 void BytecodeGraphBuilder::VisitCallRuntimeForPair() {
@@ -2020,6 +2056,8 @@ void BytecodeGraphBuilder::BuildHoleCheckAndThrow(
     SubEnvironment sub_environment(this);
 
     NewIfTrue();
+    BuildLoopExitsForFunctionExit(bytecode_analysis()->GetInLivenessFor(
+        bytecode_iterator().current_offset()));
     Node* node;
     const Operator* op = javascript()->CallRuntime(runtime_id);
     if (runtime_id == Runtime::kThrowReferenceError) {
@@ -2495,6 +2533,12 @@ void BytecodeGraphBuilder::VisitToObject() {
   BuildCastOperator(javascript()->ToObject());
 }
 
+void BytecodeGraphBuilder::VisitToString() {
+  Node* value =
+      NewNode(javascript()->ToString(), environment()->LookupAccumulator());
+  environment()->BindAccumulator(value, Environment::kAttachFrameState);
+}
+
 void BytecodeGraphBuilder::VisitToNumber() {
   PrepareEagerCheckpoint();
   Node* object = environment()->LookupAccumulator();
@@ -2826,6 +2870,7 @@ void BytecodeGraphBuilder::BuildSwitchOnGeneratorState(
     // the default to represent one of the cases above/fallthrough below?
     NewIfDefault();
     NewNode(simplified()->RuntimeAbort(AbortReason::kInvalidJumpTableIndex));
+    // TODO(7099): Investigate if we need LoopExit here.
     Node* control = NewNode(common()->Throw());
     MergeControlToLeaveFunction(control);
   }
@@ -3270,8 +3315,7 @@ Node** BytecodeGraphBuilder::EnsureInputBufferSize(int size) {
 }
 
 void BytecodeGraphBuilder::ExitThenEnterExceptionHandlers(int current_offset) {
-  Handle<HandlerTable> table = exception_handler_table();
-  int num_entries = table->NumberOfRangeEntries();
+  HandlerTable table(*bytecode_array());
 
   // Potentially exit exception handlers.
   while (!exception_handlers_.empty()) {
@@ -3281,12 +3325,13 @@ void BytecodeGraphBuilder::ExitThenEnterExceptionHandlers(int current_offset) {
   }
 
   // Potentially enter exception handlers.
+  int num_entries = table.NumberOfRangeEntries();
   while (current_exception_handler_ < num_entries) {
-    int next_start = table->GetRangeStart(current_exception_handler_);
+    int next_start = table.GetRangeStart(current_exception_handler_);
     if (current_offset < next_start) break;  // Not yet covered by range.
-    int next_end = table->GetRangeEnd(current_exception_handler_);
-    int next_handler = table->GetRangeHandler(current_exception_handler_);
-    int context_register = table->GetRangeData(current_exception_handler_);
+    int next_end = table.GetRangeEnd(current_exception_handler_);
+    int next_handler = table.GetRangeHandler(current_exception_handler_);
+    int context_register = table.GetRangeData(current_exception_handler_);
     exception_handlers_.push(
         {next_start, next_end, next_handler, context_register});
     current_exception_handler_++;

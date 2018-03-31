@@ -61,8 +61,11 @@ class TypedArrayBuiltinsAssembler : public CodeStubAssembler {
   // Returns true if kind is either UINT8_ELEMENTS or UINT8_CLAMPED_ELEMENTS.
   TNode<Word32T> IsUint8ElementsKind(TNode<Word32T> kind);
 
+  // Returns true if kind is either BIGINT64_ELEMENTS or BIGUINT64_ELEMENTS.
+  TNode<Word32T> IsBigInt64ElementsKind(TNode<Word32T> kind);
+
   // Loads the element kind of TypedArray instance.
-  TNode<Word32T> LoadElementsKind(TNode<Object> typed_array);
+  TNode<Word32T> LoadElementsKind(TNode<JSTypedArray> typed_array);
 
   // Returns the byte size of an element for a TypedArray elements kind.
   TNode<IntPtrT> GetTypedArrayElementSize(TNode<Word32T> elements_kind);
@@ -113,13 +116,15 @@ class TypedArrayBuiltinsAssembler : public CodeStubAssembler {
                                                TNode<IntPtrT> source_length,
                                                TNode<IntPtrT> offset);
 
+  void CallCCopyTypedArrayElementsSlice(TNode<JSTypedArray> source,
+                                        TNode<JSTypedArray> dest,
+                                        TNode<IntPtrT> start,
+                                        TNode<IntPtrT> end);
+
   typedef std::function<void(ElementsKind, int, int)> TypedArraySwitchCase;
 
   void DispatchTypedArrayByElementsKind(
       TNode<Word32T> elements_kind, const TypedArraySwitchCase& case_function);
-
-  void DebugSanityCheckTypedArrayIndex(TNode<JSTypedArray> array,
-                                       SloppyTNode<Smi> index);
 };
 
 }  // namespace internal

@@ -20,7 +20,7 @@ constexpr Register kReturnRegister2 = r4;
 constexpr Register kJSFunctionRegister = r3;
 constexpr Register kContextRegister = r13;
 constexpr Register kAllocateSizeRegister = r3;
-constexpr Register kSpeculationPoisonRegister = r5;
+constexpr Register kSpeculationPoisonRegister = r9;
 constexpr Register kInterpreterAccumulatorRegister = r2;
 constexpr Register kInterpreterBytecodeOffsetRegister = r6;
 constexpr Register kInterpreterBytecodeArrayRegister = r7;
@@ -989,10 +989,16 @@ class TurboAssembler : public Assembler {
     // High bits must be identical to fit into an 32-bit integer
     cgfr(value, value);
   }
-  void SmiUntag(Register reg) { SmiUntag(reg, reg); }
+  void SmiUntag(Register reg, int scale = 0) { SmiUntag(reg, reg, scale); }
 
-  void SmiUntag(Register dst, Register src) {
-    ShiftRightArithP(dst, src, Operand(kSmiShift));
+  void SmiUntag(Register dst, Register src, int scale = 0) {
+    if (scale > kSmiShift) {
+      ShiftLeftP(dst, src, Operand(scale - kSmiShift));
+    } else if (scale < kSmiShift) {
+      ShiftRightArithP(dst, src, Operand(kSmiShift - scale));
+    } else {
+      // do nothing
+    }
   }
 
   // Activation support.
@@ -1088,7 +1094,7 @@ class MacroAssembler : public TurboAssembler {
                                bool builtin_exit_frame = false);
 
   // Generates a trampoline to jump to the off-heap instruction stream.
-  void JumpToInstructionStream(const InstructionStream* stream);
+  void JumpToInstructionStream(Address entry);
 
   // Compare the object in a register to a value and jump if they are equal.
   void JumpIfRoot(Register with, Heap::RootListIndex index, Label* if_equal) {
@@ -1107,6 +1113,10 @@ class MacroAssembler : public TurboAssembler {
   // CR_EQ in cr7 is set and result assigned if the conversion is exact.
   void TryDoubleToInt32Exact(Register result, DoubleRegister double_input,
                              Register scratch, DoubleRegister double_scratch);
+
+  // ---------------------------------------------------------------------------
+  // In-place weak references.
+  void LoadWeakValue(Register out, Register in, Label* target_if_cleared);
 
   // ---------------------------------------------------------------------------
   // StatsCounter support
@@ -1228,6 +1238,10 @@ class MacroAssembler : public TurboAssembler {
   // Abort execution if argument is not a FixedArray, enabled via --debug-code.
   void AssertFixedArray(Register object);
 
+  // Abort execution if argument is not a Constructor, enabled via --debug-code.
+  void AssertConstructor(Register object, Register scratch);
+
+  // Abort execution if argument is not a JSFunction, enabled via --debug-code.
   void AssertFunction(Register object);
 
   // Abort execution if argument is not a JSBoundFunction,

@@ -149,7 +149,7 @@ void Int64Lowering::GetIndexNodes(Node* index, Node*& index_low,
 void Int64Lowering::LowerNode(Node* node) {
   switch (node->opcode()) {
     case IrOpcode::kInt64Constant: {
-      int64_t value = OpParameter<int64_t>(node);
+      int64_t value = OpParameter<int64_t>(node->op());
       Node* low_node = graph()->NewNode(
           common()->Int32Constant(static_cast<int32_t>(value & 0xFFFFFFFF)));
       Node* high_node = graph()->NewNode(
@@ -164,7 +164,7 @@ void Int64Lowering::LowerNode(Node* node) {
         rep = LoadRepresentationOf(node->op()).representation();
       } else {
         DCHECK_EQ(IrOpcode::kUnalignedLoad, node->opcode());
-        rep = UnalignedLoadRepresentationOf(node->op()).representation();
+        rep = LoadRepresentationOf(node->op()).representation();
       }
 
       if (rep == MachineRepresentation::kWord64) {

@@ -525,7 +525,7 @@ TF_BUILTIN(StringCharAt, StringBuiltinsAssembler) {
   TNode<Int32T> code = StringCharCodeAt(receiver, position);
 
   // And return the single character string with only that {code}
-  TNode<String> result = StringFromCharCode(code);
+  TNode<String> result = StringFromSingleCharCode(code);
   Return(result);
 }
 
@@ -539,7 +539,7 @@ TF_BUILTIN(StringCodePointAtUTF16, StringBuiltinsAssembler) {
       LoadSurrogatePairAt(receiver, length, position, UnicodeEncoding::UTF16);
   // And return it as TaggedSigned value.
   // TODO(turbofan): Allow builtins to return values untagged.
-  TNode<Smi> result = SmiFromWord32(code);
+  TNode<Smi> result = SmiFromInt32(code);
   Return(result);
 }
 
@@ -554,7 +554,7 @@ TF_BUILTIN(StringCodePointAtUTF32, StringBuiltinsAssembler) {
       LoadSurrogatePairAt(receiver, length, position, UnicodeEncoding::UTF32);
   // And return it as TaggedSigned value.
   // TODO(turbofan): Allow builtins to return values untagged.
-  TNode<Smi> result = SmiFromWord32(code);
+  TNode<Smi> result = SmiFromInt32(code);
   Return(result);
 }
 
@@ -586,7 +586,7 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
     Node* code32 = TruncateTaggedToWord32(context, code);
     TNode<Int32T> code16 =
         Signed(Word32And(code32, Int32Constant(String::kMaxUtf16CodeUnit)));
-    Node* result = StringFromCharCode(code16);
+    Node* result = StringFromSingleCharCode(code16);
     arguments.PopAndReturn(result);
   }
 
@@ -682,7 +682,7 @@ TF_BUILTIN(StringPrototypeCharAt, StringBuiltinsAssembler) {
                    [this](TNode<String> string, TNode<IntPtrT> length,
                           TNode<IntPtrT> index) {
                      TNode<Int32T> code = StringCharCodeAt(string, index);
-                     return StringFromCharCode(code);
+                     return StringFromSingleCharCode(code);
                    });
 }
 
@@ -697,7 +697,7 @@ TF_BUILTIN(StringPrototypeCharCodeAt, StringBuiltinsAssembler) {
                    [this](TNode<String> receiver, TNode<IntPtrT> length,
                           TNode<IntPtrT> index) {
                      Node* value = StringCharCodeAt(receiver, index);
-                     return SmiFromWord32(value);
+                     return SmiFromInt32(value);
                    });
 }
 
@@ -715,7 +715,7 @@ TF_BUILTIN(StringPrototypeCodePointAt, StringBuiltinsAssembler) {
                      // so we need to produce UTF32.
                      Node* value = LoadSurrogatePairAt(receiver, length, index,
                                                        UnicodeEncoding::UTF32);
-                     return SmiFromWord32(value);
+                     return SmiFromInt32(value);
                    });
 }
 
@@ -1144,8 +1144,8 @@ compiler::Node* StringBuiltinsAssembler::GetSubstitution(
     CSA_ASSERT(this, TaggedIsPositiveSmi(dollar_index));
 
     Node* const matched =
-        CallBuiltin(Builtins::kSubString, context, subject_string,
-                    match_start_index, match_end_index);
+        CallBuiltin(Builtins::kStringSubstring, context, subject_string,
+                    SmiUntag(match_start_index), SmiUntag(match_end_index));
     Node* const replacement_string =
         CallRuntime(Runtime::kGetSubstitution, context, matched, subject_string,
                     match_start_index, replace_string, dollar_index);
@@ -1258,7 +1258,7 @@ TF_BUILTIN(StringRepeat, StringBuiltinsAssembler) {
   {
     {
       Label next(this);
-      GotoIfNot(SmiToWord32(SmiAnd(var_count.value(), SmiConstant(1))), &next);
+      GotoIfNot(SmiToInt32(SmiAnd(var_count.value(), SmiConstant(1))), &next);
       var_result.Bind(CallStub(stringadd_callable, context, var_result.value(),
                                var_temp.value()));
       Goto(&next);
@@ -1382,8 +1382,8 @@ TF_BUILTIN(StringPrototypeReplace, StringBuiltinsAssembler) {
 
     GotoIf(SmiEqual(match_start_index, smi_zero), &next);
     Node* const prefix =
-        CallBuiltin(Builtins::kSubString, context, subject_string, smi_zero,
-                    match_start_index);
+        CallBuiltin(Builtins::kStringSubstring, context, subject_string,
+                    IntPtrConstant(0), SmiUntag(match_start_index));
     var_result.Bind(prefix);
 
     Goto(&next);
@@ -1423,8 +1423,8 @@ TF_BUILTIN(StringPrototypeReplace, StringBuiltinsAssembler) {
   BIND(&out);
   {
     Node* const suffix =
-        CallBuiltin(Builtins::kSubString, context, subject_string,
-                    match_end_index, subject_length);
+        CallBuiltin(Builtins::kStringSubstring, context, subject_string,
+                    SmiUntag(match_end_index), SmiUntag(subject_length));
     Node* const result =
         CallStub(stringadd_callable, context, var_result.value(), suffix);
     Return(result);
@@ -1468,10 +1468,9 @@ class StringMatchSearchAssembler : public StringBuiltinsAssembler {
       RegExpBuiltinsAssembler regexp_asm(state());
 
       Node* const receiver_string = ToString_Inline(context, receiver);
-      Node* const pattern = Select(
+      TNode<Object> const pattern = Select<Object>(
           IsUndefined(maybe_regexp), [=] { return EmptyStringConstant(); },
-          [=] { return ToString_Inline(context, maybe_regexp); },
-          MachineRepresentation::kTagged);
+          [=] { return ToString_Inline(context, maybe_regexp); });
 
       // Create RegExp
       // TODO(pwong): This could be factored out as a helper (RegExpCreate) that
@@ -1590,8 +1589,8 @@ class StringPadAssembler : public StringBuiltinsAssembler {
       BIND(&multi_char_fill);
       {
         TNode<Int32T> const fill_length_word32 =
-            TruncateWordToWord32(var_fill_length.value());
-        TNode<Int32T> const pad_length_word32 = SmiToWord32(pad_length);
+            TruncateIntPtrToInt32(var_fill_length.value());
+        TNode<Int32T> const pad_length_word32 = SmiToInt32(pad_length);
         TNode<Int32T> const repetitions_word32 =
             Int32Div(pad_length_word32, fill_length_word32);
         TNode<Int32T> const remaining_word32 =
@@ -1599,13 +1598,13 @@ class StringPadAssembler : public StringBuiltinsAssembler {
 
         var_pad.Bind(CallBuiltin(Builtins::kStringRepeat, context,
                                  var_fill_string.value(),
-                                 SmiFromWord32(repetitions_word32)));
+                                 SmiFromInt32(repetitions_word32)));
 
         GotoIfNot(remaining_word32, &return_result);
         {
           Node* const remainder_string = CallBuiltin(
-              Builtins::kSubString, context, var_fill_string.value(),
-              SmiConstant(0), SmiFromWord32(remaining_word32));
+              Builtins::kStringSubstring, context, var_fill_string.value(),
+              IntPtrConstant(0), ChangeInt32ToIntPtr(remaining_word32));
           var_pad.Bind(CallStub(stringadd_callable, context, var_pad.value(),
                                 remainder_string));
           Goto(&return_result);
@@ -1649,8 +1648,8 @@ TF_BUILTIN(StringPrototypeSearch, StringMatchSearchAssembler) {
 // ES6 section 21.1.3.18 String.prototype.slice ( start, end )
 TF_BUILTIN(StringPrototypeSlice, StringBuiltinsAssembler) {
   Label out(this);
-  TVARIABLE(Smi, var_start);
-  TVARIABLE(Smi, var_end);
+  TVARIABLE(IntPtrT, var_start);
+  TVARIABLE(IntPtrT, var_end);
 
   const int kStart = 0;
   const int kEnd = 1;
@@ -1659,18 +1658,18 @@ TF_BUILTIN(StringPrototypeSlice, StringBuiltinsAssembler) {
   CodeStubArguments args(this, argc);
   Node* const receiver = args.GetReceiver();
   TNode<Object> start = args.GetOptionalArgumentValue(kStart);
-  TNode<Object> end = CAST(args.GetOptionalArgumentValue(kEnd));
+  TNode<Object> end = args.GetOptionalArgumentValue(kEnd);
   TNode<Context> context = CAST(Parameter(BuiltinDescriptor::kContext));
 
   // 1. Let O be ? RequireObjectCoercible(this value).
   RequireObjectCoercible(context, receiver, "String.prototype.slice");
 
   // 2. Let S be ? ToString(O).
-  Node* const subject_string =
-      CallBuiltin(Builtins::kToString, context, receiver);
+  TNode<String> const subject_string =
+      CAST(CallBuiltin(Builtins::kToString, context, receiver));
 
   // 3. Let len be the number of elements in S.
-  TNode<Smi> const length = LoadStringLengthAsSmi(subject_string);
+  TNode<IntPtrT> const length = LoadStringLengthAsWord(subject_string);
 
   // Convert {start} to a relative index.
   var_start = ConvertToRelativeIndex(context, start, length);
@@ -1686,9 +1685,9 @@ TF_BUILTIN(StringPrototypeSlice, StringBuiltinsAssembler) {
   Label return_emptystring(this);
   BIND(&out);
   {
-    GotoIf(SmiLessThanOrEqual(var_end.value(), var_start.value()),
+    GotoIf(IntPtrLessThanOrEqual(var_end.value(), var_start.value()),
            &return_emptystring);
-    Node* const result =
+    TNode<String> const result =
         SubString(subject_string, var_start.value(), var_end.value());
     args.PopAndReturn(result);
   }
@@ -1732,10 +1731,9 @@ TF_BUILTIN(StringPrototypeSplit, StringBuiltinsAssembler) {
   // String and integer conversions.
 
   Node* const subject_string = ToString_Inline(context, receiver);
-  Node* const limit_number =
-      Select(IsUndefined(limit), [=]() { return NumberConstant(kMaxUInt32); },
-             [=]() { return ToUint32(context, limit); },
-             MachineRepresentation::kTagged);
+  TNode<Number> const limit_number = Select<Number>(
+      IsUndefined(limit), [=] { return NumberConstant(kMaxUInt32); },
+      [=] { return ToUint32(context, limit); });
   Node* const separator_string = ToString_Inline(context, separator);
 
   // Shortcut for {limit} == 0.
@@ -1808,21 +1806,21 @@ TF_BUILTIN(StringPrototypeSubstr, StringBuiltinsAssembler) {
 
   Node* const receiver = args.GetReceiver();
   TNode<Object> start = args.GetOptionalArgumentValue(kStartArg);
-  TNode<Object> length = CAST(args.GetOptionalArgumentValue(kLengthArg));
+  TNode<Object> length = args.GetOptionalArgumentValue(kLengthArg);
   TNode<Context> context = CAST(Parameter(BuiltinDescriptor::kContext));
 
   Label out(this);
 
-  TVARIABLE(Smi, var_start);
+  TVARIABLE(IntPtrT, var_start);
   TVARIABLE(Number, var_length);
 
-  TNode<Smi> const zero = SmiConstant(0);
+  TNode<IntPtrT> const zero = IntPtrConstant(0);
 
   // Check that {receiver} is coercible to Object and convert it to a String.
-  Node* const string =
+  TNode<String> const string =
       ToThisString(context, receiver, "String.prototype.substr");
 
-  TNode<Smi> const string_length = LoadStringLengthAsSmi(string);
+  TNode<IntPtrT> const string_length = LoadStringLengthAsWord(string);
 
   // Convert {start} to a relative index.
   var_start = ConvertToRelativeIndex(context, start, string_length);
@@ -1836,7 +1834,7 @@ TF_BUILTIN(StringPrototypeSubstr, StringBuiltinsAssembler) {
     Branch(IsUndefined(length), &if_isundefined, &if_isnotundefined);
 
     BIND(&if_isundefined);
-    var_length = string_length;
+    var_length = SmiTag(string_length);
     Goto(&if_issmi);
 
     BIND(&if_isnotundefined);
@@ -1844,18 +1842,20 @@ TF_BUILTIN(StringPrototypeSubstr, StringBuiltinsAssembler) {
                                   CodeStubAssembler::kTruncateMinusZero);
   }
 
-  TVARIABLE(Smi, var_result_length);
+  TVARIABLE(IntPtrT, var_result_length);
 
   Branch(TaggedIsSmi(var_length.value()), &if_issmi, &if_isheapnumber);
 
   // Set {length} to min(max({length}, 0), {string_length} - {start}
   BIND(&if_issmi);
   {
-    TNode<Smi> const positive_length = SmiMax(CAST(var_length.value()), zero);
-    TNode<Smi> const minimal_length = SmiSub(string_length, var_start.value());
-    var_result_length = SmiMin(positive_length, minimal_length);
+    TNode<IntPtrT> const positive_length =
+        IntPtrMax(SmiUntag(CAST(var_length.value())), zero);
+    TNode<IntPtrT> const minimal_length =
+        IntPtrSub(string_length, var_start.value());
+    var_result_length = IntPtrMin(positive_length, minimal_length);
 
-    GotoIfNot(SmiLessThanOrEqual(var_result_length.value(), zero), &out);
+    GotoIfNot(IntPtrLessThanOrEqual(var_result_length.value(), zero), &out);
     args.PopAndReturn(EmptyStringConstant());
   }
 
@@ -1879,17 +1879,17 @@ TF_BUILTIN(StringPrototypeSubstr, StringBuiltinsAssembler) {
 
     BIND(&if_ispositive);
     {
-      var_result_length = SmiSub(string_length, var_start.value());
-      GotoIfNot(SmiLessThanOrEqual(var_result_length.value(), zero), &out);
+      var_result_length = IntPtrSub(string_length, var_start.value());
+      GotoIfNot(IntPtrLessThanOrEqual(var_result_length.value(), zero), &out);
       args.PopAndReturn(EmptyStringConstant());
     }
   }
 
   BIND(&out);
   {
-    TNode<Smi> const end = SmiAdd(var_start.value(), var_result_length.value());
-    Node* const result = SubString(string, var_start.value(), end);
-    args.PopAndReturn(result);
+    TNode<IntPtrT> const end =
+        IntPtrAdd(var_start.value(), var_result_length.value());
+    args.PopAndReturn(SubString(string, var_start.value(), end));
   }
 }
 
@@ -1899,7 +1899,7 @@ TNode<Smi> StringBuiltinsAssembler::ToSmiBetweenZeroAnd(
   Label out(this);
   TVARIABLE(Smi, var_result);
 
-  TNode<Object> const value_int =
+  TNode<Number> const value_int =
       ToInteger_Inline(context, value, CodeStubAssembler::kTruncateMinusZero);
 
   Label if_issmi(this), if_isnotsmi(this, Label::kDeferred);
@@ -1907,8 +1907,9 @@ TNode<Smi> StringBuiltinsAssembler::ToSmiBetweenZeroAnd(
 
   BIND(&if_issmi);
   {
+    TNode<Smi> value_smi = CAST(value_int);
     Label if_isinbounds(this), if_isoutofbounds(this, Label::kDeferred);
-    Branch(SmiAbove(value_int, limit), &if_isoutofbounds, &if_isinbounds);
+    Branch(SmiAbove(value_smi, limit), &if_isoutofbounds, &if_isinbounds);
 
     BIND(&if_isinbounds);
     {
@@ -1920,7 +1921,7 @@ TNode<Smi> StringBuiltinsAssembler::ToSmiBetweenZeroAnd(
     {
       TNode<Smi> const zero = SmiConstant(0);
       var_result =
-          SelectTaggedConstant(SmiLessThan(value_int, zero), zero, limit);
+          SelectTaggedConstant(SmiLessThan(value_smi, zero), zero, limit);
       Goto(&out);
     }
   }
@@ -1942,10 +1943,10 @@ TNode<Smi> StringBuiltinsAssembler::ToSmiBetweenZeroAnd(
   return var_result.value();
 }
 
-TF_BUILTIN(SubString, CodeStubAssembler) {
-  Node* string = Parameter(Descriptor::kString);
-  Node* from = Parameter(Descriptor::kFrom);
-  Node* to = Parameter(Descriptor::kTo);
+TF_BUILTIN(StringSubstring, CodeStubAssembler) {
+  TNode<String> string = CAST(Parameter(Descriptor::kString));
+  TNode<IntPtrT> from = UncheckedCast<IntPtrT>(Parameter(Descriptor::kFrom));
+  TNode<IntPtrT> to = UncheckedCast<IntPtrT>(Parameter(Descriptor::kTo));
 
   Return(SubString(string, from, to));
 }
@@ -1970,7 +1971,7 @@ TF_BUILTIN(StringPrototypeSubstring, StringBuiltinsAssembler) {
   VARIABLE(var_end, MachineRepresentation::kTagged);
 
   // Check that {receiver} is coercible to Object and convert it to a String.
-  Node* const string =
+  TNode<String> const string =
       ToThisString(context, receiver, "String.prototype.substring");
 
   Node* const length = LoadStringLengthAsSmi(string);
@@ -2000,8 +2001,8 @@ TF_BUILTIN(StringPrototypeSubstring, StringBuiltinsAssembler) {
 
   BIND(&out);
   {
-    Node* result = SubString(string, var_start.value(), var_end.value());
-    args.PopAndReturn(result);
+    args.PopAndReturn(SubString(string, SmiUntag(var_start.value()),
+                                SmiUntag(var_end.value())));
   }
 }
 
@@ -2030,7 +2031,7 @@ void StringTrimAssembler::Generate(String::TrimMode mode,
   Node* const receiver = arguments.GetReceiver();
 
   // Check that {receiver} is coercible to Object and convert it to a String.
-  Node* const string = ToThisString(context, receiver, method_name);
+  TNode<String> const string = ToThisString(context, receiver, method_name);
   TNode<IntPtrT> const string_length = LoadStringLengthAsWord(string);
 
   ToDirectStringAssembler to_direct(state(), string);
@@ -2055,8 +2056,8 @@ void StringTrimAssembler::Generate(String::TrimMode mode,
   }
 
   arguments.PopAndReturn(
-      SubString(string, SmiTag(var_start.value()),
-                SmiAdd(SmiTag(var_end.value()), SmiConstant(1))));
+      SubString(string, var_start.value(),
+                IntPtrAdd(var_end.value(), IntPtrConstant(1))));
 
   BIND(&if_runtime);
   arguments.PopAndReturn(
@@ -2302,7 +2303,7 @@ TF_BUILTIN(StringIteratorPrototypeNext, StringBuiltinsAssembler) {
   {
     UnicodeEncoding encoding = UnicodeEncoding::UTF16;
     TNode<Int32T> ch = LoadSurrogatePairAt(string, length, position, encoding);
-    TNode<String> value = StringFromCodePoint(ch, encoding);
+    TNode<String> value = StringFromSingleCodePoint(ch, encoding);
     var_value.Bind(value);
     TNode<IntPtrT> length = LoadStringLengthAsWord(value);
     StoreObjectFieldNoWriteBarrier(iterator, JSStringIterator::kNextIndexOffset,

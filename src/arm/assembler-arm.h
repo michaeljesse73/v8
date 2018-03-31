@@ -162,8 +162,8 @@ class Register : public RegisterBase<Register, kRegAfterLast> {
   explicit constexpr Register(int code) : RegisterBase(code) {}
 };
 
-static_assert(IS_TRIVIALLY_COPYABLE(Register) &&
-                  sizeof(Register) == sizeof(int),
+ASSERT_TRIVIALLY_COPYABLE(Register);
+static_assert(sizeof(Register) == sizeof(int),
               "Register can efficiently be passed by value");
 
 // r7: context register
@@ -218,8 +218,8 @@ class SwVfpRegister : public RegisterBase<SwVfpRegister, kSwVfpAfterLast> {
   explicit constexpr SwVfpRegister(int code) : RegisterBase(code) {}
 };
 
-static_assert(IS_TRIVIALLY_COPYABLE(SwVfpRegister) &&
-                  sizeof(SwVfpRegister) == sizeof(int),
+ASSERT_TRIVIALLY_COPYABLE(SwVfpRegister);
+static_assert(sizeof(SwVfpRegister) == sizeof(int),
               "SwVfpRegister can efficiently be passed by value");
 
 typedef SwVfpRegister FloatRegister;
@@ -256,8 +256,8 @@ class DwVfpRegister : public RegisterBase<DwVfpRegister, kDoubleAfterLast> {
   explicit constexpr DwVfpRegister(int code) : RegisterBase(code) {}
 };
 
-static_assert(IS_TRIVIALLY_COPYABLE(DwVfpRegister) &&
-                  sizeof(DwVfpRegister) == sizeof(int),
+ASSERT_TRIVIALLY_COPYABLE(DwVfpRegister);
+static_assert(sizeof(DwVfpRegister) == sizeof(int),
               "DwVfpRegister can efficiently be passed by value");
 
 typedef DwVfpRegister DoubleRegister;
@@ -741,6 +741,8 @@ class Assembler : public AssemblerBase {
 
   void and_(Register dst, Register src1, const Operand& src2,
             SBit s = LeaveCC, Condition cond = al);
+  void and_(Register dst, Register src1, Register src2, SBit s = LeaveCC,
+            Condition cond = al);
 
   void eor(Register dst, Register src1, const Operand& src2,
            SBit s = LeaveCC, Condition cond = al);
@@ -959,6 +961,9 @@ class Assembler : public AssemblerBase {
   void dmb(BarrierOption option);
   void dsb(BarrierOption option);
   void isb(BarrierOption option);
+
+  // Conditional speculation barrier.
+  void csdb();
 
   // Coprocessor instructions
 
@@ -1815,15 +1820,14 @@ class UseScratchRegisterScope {
     return reg;
   }
 
+  // Check if we have registers available to acquire.
+  bool CanAcquire() const { return *assembler_->GetScratchRegisterList() != 0; }
+  bool CanAcquireD() const { return CanAcquireVfp<DwVfpRegister>(); }
+
  private:
   friend class Assembler;
   friend class TurboAssembler;
 
-  // Check if we have registers available to acquire.
-  // These methods are kept private intentionally to restrict their usage to the
-  // assemblers. Choosing to emit a difference instruction sequence depending on
-  // the availability of scratch registers is generally their job.
-  bool CanAcquire() const { return *assembler_->GetScratchRegisterList() != 0; }
   template <typename T>
   bool CanAcquireVfp() const;
 

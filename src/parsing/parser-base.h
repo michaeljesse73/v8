@@ -278,13 +278,13 @@ class ParserBase {
         script_id_(script_id),
         allow_natives_(false),
         allow_harmony_do_expressions_(false),
-        allow_harmony_function_sent_(false),
         allow_harmony_public_fields_(false),
         allow_harmony_static_fields_(false),
         allow_harmony_dynamic_import_(false),
         allow_harmony_import_meta_(false),
         allow_harmony_optional_catch_binding_(false),
-        allow_harmony_private_fields_(false) {}
+        allow_harmony_private_fields_(false),
+        allow_eval_cache_(true) {}
 
 #define ALLOW_ACCESSORS(name)                           \
   bool allow_##name() const { return allow_##name##_; } \
@@ -292,12 +292,12 @@ class ParserBase {
 
   ALLOW_ACCESSORS(natives);
   ALLOW_ACCESSORS(harmony_do_expressions);
-  ALLOW_ACCESSORS(harmony_function_sent);
   ALLOW_ACCESSORS(harmony_public_fields);
   ALLOW_ACCESSORS(harmony_static_fields);
   ALLOW_ACCESSORS(harmony_dynamic_import);
   ALLOW_ACCESSORS(harmony_import_meta);
   ALLOW_ACCESSORS(harmony_optional_catch_binding);
+  ALLOW_ACCESSORS(eval_cache);
 
 #undef ALLOW_ACCESSORS
 
@@ -306,6 +306,12 @@ class ParserBase {
   }
   void set_allow_harmony_bigint(bool allow) {
     scanner()->set_allow_harmony_bigint(allow);
+  }
+  bool allow_harmony_numeric_separator() const {
+    return scanner()->allow_harmony_numeric_separator();
+  }
+  void set_allow_harmony_numeric_separator(bool allow) {
+    scanner()->set_allow_harmony_numeric_separator(allow);
   }
 
   bool allow_harmony_private_fields() const {
@@ -1086,6 +1092,8 @@ class ParserBase {
 
   IdentifierT ParseIdentifierName(bool* ok);
 
+  ExpressionT ParseIdentifierNameOrPrivateName(bool* ok);
+
   ExpressionT ParseRegExpLiteral(bool* ok);
 
   ExpressionT ParsePrimaryExpression(bool* is_async, bool* ok);
@@ -1549,13 +1557,13 @@ class ParserBase {
 
   bool allow_natives_;
   bool allow_harmony_do_expressions_;
-  bool allow_harmony_function_sent_;
   bool allow_harmony_public_fields_;
   bool allow_harmony_static_fields_;
   bool allow_harmony_dynamic_import_;
   bool allow_harmony_import_meta_;
   bool allow_harmony_optional_catch_binding_;
   bool allow_harmony_private_fields_;
+  bool allow_eval_cache_;
 
   friend class DiscardableZoneScope;
 };
@@ -1782,6 +1790,27 @@ typename ParserBase<Impl>::IdentifierT ParserBase<Impl>::ParseIdentifierName(
   }
 
   return impl()->GetSymbol();
+}
+
+template <typename Impl>
+typename ParserBase<Impl>::ExpressionT
+ParserBase<Impl>::ParseIdentifierNameOrPrivateName(bool* ok) {
+  int pos = position();
+  IdentifierT name;
+  ExpressionT key;
+  if (allow_harmony_private_fields() && peek() == Token::PRIVATE_NAME) {
+    Consume(Token::PRIVATE_NAME);
+    name = impl()->GetSymbol();
+    auto key_proxy =
+        impl()->ExpressionFromIdentifier(name, pos, InferName::kNo);
+    key_proxy->set_is_private_field();
+    key = key_proxy;
+  } else {
+    name = ParseIdentifierName(CHECK_OK);
+    key = factory()->NewStringLiteral(name, pos);
+  }
+  impl()->PushLiteralName(name);
+  return key;
 }
 
 template <typename Impl>
@@ -3208,10 +3237,16 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseUnaryExpression(
     ExpressionT expression = ParseUnaryExpression(CHECK_OK);
     ValidateExpression(CHECK_OK);
 
-    if (op == Token::DELETE && is_strict(language_mode())) {
-      if (impl()->IsIdentifier(expression)) {
+    if (op == Token::DELETE) {
+      if (impl()->IsIdentifier(expression) && is_strict(language_mode())) {
         // "delete identifier" is a syntax error in strict mode.
         ReportMessage(MessageTemplate::kStrictDelete);
+        *ok = false;
+        return impl()->NullExpression();
+      }
+
+      if (impl()->IsPropertyWithPrivateFieldKey(expression)) {
+        ReportMessage(MessageTemplate::kDeletePrivateField);
         *ok = false;
         return impl()->NullExpression();
       }
@@ -3417,10 +3452,8 @@ ParserBase<Impl>::ParseLeftHandSideExpression(bool* ok) {
         ArrowFormalParametersUnexpectedToken();
         Consume(Token::PERIOD);
         int pos = position();
-        IdentifierT name = ParseIdentifierName(CHECK_OK);
-        result = factory()->NewProperty(
-            result, factory()->NewStringLiteral(name, pos), pos);
-        impl()->PushLiteralName(name);
+        ExpressionT key = ParseIdentifierNameOrPrivateName(CHECK_OK);
+        result = factory()->NewProperty(result, key, pos);
         break;
       }
 
@@ -3530,22 +3563,6 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseMemberExpression(
 
     Consume(Token::FUNCTION);
     int function_token_position = position();
-
-    if (allow_harmony_function_sent() && peek() == Token::PERIOD) {
-      // function.sent
-      int pos = position();
-      ExpectMetaProperty(Token::SENT, "function.sent", pos, CHECK_OK);
-
-      if (!is_generator()) {
-        // TODO(neis): allow escaping into closures?
-        impl()->ReportMessageAt(scanner()->location(),
-                                MessageTemplate::kUnexpectedFunctionSent);
-        *ok = false;
-        return impl()->NullExpression();
-      }
-
-      return impl()->FunctionSentExpression(pos);
-    }
 
     FunctionKind function_kind = Check(Token::MUL)
                                      ? FunctionKind::kGeneratorFunction
@@ -3717,21 +3734,8 @@ ParserBase<Impl>::ParseMemberExpressionContinuation(ExpressionT expression,
 
         Consume(Token::PERIOD);
         int pos = peek_position();
-        ExpressionT key;
-        IdentifierT name;
-        if (allow_harmony_private_fields() && peek() == Token::PRIVATE_NAME) {
-          Consume(Token::PRIVATE_NAME);
-          name = impl()->GetSymbol();
-          auto key_proxy =
-              impl()->ExpressionFromIdentifier(name, pos, InferName::kNo);
-          key_proxy->set_is_private_field();
-          key = key_proxy;
-        } else {
-          name = ParseIdentifierName(CHECK_OK);
-          key = factory()->NewStringLiteral(name, pos);
-        }
+        ExpressionT key = ParseIdentifierNameOrPrivateName(CHECK_OK);
         expression = factory()->NewProperty(expression, key, pos);
-        impl()->PushLiteralName(name);
         break;
       }
       case Token::TEMPLATE_SPAN:
@@ -4671,6 +4675,12 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseTemplateLiteral(
   // When parsing a TemplateLiteral, we must have scanned either an initial
   // TEMPLATE_SPAN, or a TEMPLATE_TAIL.
   DCHECK(peek() == Token::TEMPLATE_SPAN || peek() == Token::TEMPLATE_TAIL);
+
+  if (tagged) {
+    // TaggedTemplate expressions prevent the eval compilation cache from being
+    // used. This flag is only used if an eval is being parsed.
+    set_allow_eval_cache(false);
+  }
 
   bool forbid_illegal_escapes = !tagged;
 

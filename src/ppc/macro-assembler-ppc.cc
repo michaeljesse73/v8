@@ -168,7 +168,7 @@ void TurboAssembler::Call(Register target) {
 }
 
 void MacroAssembler::CallJSEntry(Register target) {
-  DCHECK(target == ip);
+  CHECK(target == r5);
   Call(target);
 }
 
@@ -825,7 +825,7 @@ void TurboAssembler::ShiftRightAlgPair(Register dst_low, Register dst_high,
 }
 #endif
 
-void MacroAssembler::LoadConstantPoolPointerRegisterFromCodeTargetAddress(
+void TurboAssembler::LoadConstantPoolPointerRegisterFromCodeTargetAddress(
     Register code_target_address) {
   lwz(kConstantPoolRegister,
       MemOperand(code_target_address,
@@ -833,40 +833,34 @@ void MacroAssembler::LoadConstantPoolPointerRegisterFromCodeTargetAddress(
   add(kConstantPoolRegister, kConstantPoolRegister, code_target_address);
 }
 
-void TurboAssembler::LoadConstantPoolPointerRegister(Register base,
-                                                     int code_start_delta) {
-  add_label_offset(kConstantPoolRegister, base, ConstantPoolPosition(),
-                   code_start_delta);
+void TurboAssembler::LoadPC(Register dst) {
+  b(4, SetLK);
+  mflr(dst);
 }
 
 void TurboAssembler::LoadConstantPoolPointerRegister() {
-  mov_label_addr(kConstantPoolRegister, ConstantPoolPosition());
+  LoadPC(kConstantPoolRegister);
+  add_label_offset(kConstantPoolRegister, kConstantPoolRegister,
+                   ConstantPoolPosition(), -pc_offset() + 4);
 }
 
-void TurboAssembler::StubPrologue(StackFrame::Type type, Register base,
-                                  int prologue_offset) {
+void TurboAssembler::StubPrologue(StackFrame::Type type) {
   {
     ConstantPoolUnavailableScope constant_pool_unavailable(this);
     mov(r11, Operand(StackFrame::TypeToMarker(type)));
     PushCommonFrame(r11);
   }
   if (FLAG_enable_embedded_constant_pool) {
-    if (base != no_reg) {
-      // base contains prologue address
-      LoadConstantPoolPointerRegister(base, -prologue_offset);
-    } else {
-      LoadConstantPoolPointerRegister();
-    }
+    LoadConstantPoolPointerRegister();
     set_constant_pool_available(true);
   }
 }
 
-void TurboAssembler::Prologue(Register base, int prologue_offset) {
-  DCHECK(base != no_reg);
+void TurboAssembler::Prologue() {
   PushStandardFrame(r4);
   if (FLAG_enable_embedded_constant_pool) {
     // base contains prologue address
-    LoadConstantPoolPointerRegister(base, -prologue_offset);
+    LoadConstantPoolPointerRegister();
     set_constant_pool_available(true);
   }
 }
@@ -1190,15 +1184,7 @@ void MacroAssembler::InvokePrologue(const ParameterCount& expected,
 void MacroAssembler::CheckDebugHook(Register fun, Register new_target,
                                     const ParameterCount& expected,
                                     const ParameterCount& actual) {
-  Label skip_hook, call_hook;
-
-  ExternalReference debug_is_active =
-      ExternalReference::debug_is_active_address(isolate());
-  mov(r7, Operand(debug_is_active));
-  LoadByte(r7, MemOperand(r7), r0);
-  extsb(r7, r7);
-  CmpSmiLiteral(r7, Smi::kZero, r0);
-  beq(&skip_hook);
+  Label skip_hook;
 
   ExternalReference debug_hook_avtive =
       ExternalReference::debug_hook_on_function_call_address(isolate());
@@ -1206,17 +1192,8 @@ void MacroAssembler::CheckDebugHook(Register fun, Register new_target,
   LoadByte(r7, MemOperand(r7), r0);
   extsb(r7, r7);
   CmpSmiLiteral(r7, Smi::kZero, r0);
-  bne(&call_hook);
+  beq(&skip_hook);
 
-  LoadP(r7, FieldMemOperand(fun, JSFunction::kSharedFunctionInfoOffset));
-  LoadP(r7, FieldMemOperand(r7, SharedFunctionInfo::kDebugInfoOffset));
-  JumpIfSmi(r7, &skip_hook);
-  LoadP(r7, FieldMemOperand(r7, DebugInfo::kFlagsOffset));
-  SmiUntag(r0, r7);
-  andi(r0, r0, Operand(DebugInfo::kBreakAtEntry));
-  beq(&skip_hook, cr0);
-
-  bind(&call_hook);
   {
     FrameScope frame(this,
                      has_frame() ? StackFrame::NONE : StackFrame::INTERNAL);
@@ -1273,7 +1250,7 @@ void MacroAssembler::InvokeFunctionCode(Register function, Register new_target,
     // We call indirectly through the code field in the function to
     // allow recompilation to take effect without changing any of the
     // call sites.
-    Register code = ip;
+    Register code = kJavaScriptCallCodeStartRegister;
     LoadP(code, FieldMemOperand(function, JSFunction::kCodeOffset));
     addi(code, code, Operand(Code::kHeaderSize - kHeapObjectTag));
     if (flag == CALL_FUNCTION) {
@@ -1638,10 +1615,19 @@ void MacroAssembler::JumpToExternalReference(const ExternalReference& builtin,
   Jump(stub.GetCode(), RelocInfo::CODE_TARGET);
 }
 
-void MacroAssembler::JumpToInstructionStream(const InstructionStream* stream) {
-  intptr_t bytes_address = reinterpret_cast<intptr_t>(stream->bytes());
-  mov(kOffHeapTrampolineRegister, Operand(bytes_address, RelocInfo::NONE));
+void MacroAssembler::JumpToInstructionStream(Address entry) {
+  mov(kOffHeapTrampolineRegister,
+      Operand(reinterpret_cast<intptr_t>(entry), RelocInfo::OFF_HEAP_TARGET));
   Jump(kOffHeapTrampolineRegister);
+}
+
+void MacroAssembler::LoadWeakValue(Register out, Register in,
+                                   Label* target_if_cleared) {
+  cmpi(in, Operand(kClearedWeakHeapObject));
+  beq(target_if_cleared);
+
+  mov(r0, Operand(~kWeakHeapObjectMask));
+  and_(out, in, r0);
 }
 
 void MacroAssembler::IncrementCounter(StatsCounter* counter, int value,
@@ -1757,6 +1743,20 @@ void MacroAssembler::AssertFixedArray(Register object) {
     CompareObjectType(object, object, object, FIXED_ARRAY_TYPE);
     pop(object);
     Check(eq, AbortReason::kOperandIsNotAFixedArray);
+  }
+}
+
+void MacroAssembler::AssertConstructor(Register object) {
+  if (emit_debug_code()) {
+    STATIC_ASSERT(kSmiTag == 0);
+    TestIfSmi(object, r0);
+    Check(ne, AbortReason::kOperandIsASmiAndNotAConstructor);
+    push(object);
+    LoadP(object, FieldMemOperand(object, HeapObject::kMapOffset));
+    lbz(object, FieldMemOperand(object, Map::kBitFieldOffset));
+    andi(object, object, Operand(Map::IsConstructorBit::kMask));
+    pop(object);
+    Check(ne, AbortReason::kOperandIsNotAConstructor, cr0);
   }
 }
 
@@ -2405,11 +2405,12 @@ void MacroAssembler::AndSmiLiteral(Register dst, Register src, Smi* smi,
 // Load a "pointer" sized value from the memory location
 void TurboAssembler::LoadP(Register dst, const MemOperand& mem,
                            Register scratch) {
+  DCHECK_EQ(mem.rb(), no_reg);
   int offset = mem.offset();
 
   if (!is_int16(offset)) {
     /* cannot use d-form */
-    DCHECK(scratch != no_reg);
+    DCHECK_EQ(scratch, no_reg);
     mov(scratch, Operand(offset));
     LoadPX(dst, MemOperand(mem.ra(), scratch));
   } else {
@@ -2939,7 +2940,9 @@ bool AreAliased(DoubleRegister reg1, DoubleRegister reg2, DoubleRegister reg3,
 }
 #endif
 
-void TurboAssembler::ResetSpeculationPoisonRegister() { UNREACHABLE(); }
+void TurboAssembler::ResetSpeculationPoisonRegister() {
+  mov(kSpeculationPoisonRegister, Operand(-1));
+}
 
 }  // namespace internal
 }  // namespace v8

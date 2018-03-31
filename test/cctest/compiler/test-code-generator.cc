@@ -125,8 +125,8 @@ Handle<Code> BuildSetupFunction(Isolate* isolate,
             tester.raw_assembler_for_testing()->machine()->I32x4Splat(),
             __ Int32Constant(0));
         for (int lane = 0; lane < 4; lane++) {
-          Node* lane_value = __ SmiToWord32(
-              __ LoadFixedArrayElement(element, __ IntPtrConstant(lane)));
+          TNode<Int32T> lane_value = __ LoadAndUntagToWord32FixedArrayElement(
+              element, __ IntPtrConstant(lane));
           vector = tester.raw_assembler_for_testing()->AddNode(
               tester.raw_assembler_for_testing()->machine()->I32x4ReplaceLane(
                   lane),
@@ -206,7 +206,7 @@ Handle<Code> BuildTeardownFunction(Isolate* isolate,
       case MachineRepresentation::kFloat32:
         param =
             tester.raw_assembler_for_testing()->ChangeFloat32ToFloat64(param);
-      // Fallthrough
+        V8_FALLTHROUGH;
       case MachineRepresentation::kFloat64:
         __ StoreObjectFieldNoWriteBarrier(
             __ LoadFixedArrayElement(result_array, i), HeapNumber::kValueOffset,
@@ -216,7 +216,7 @@ Handle<Code> BuildTeardownFunction(Isolate* isolate,
         Node* vector = __ LoadFixedArrayElement(result_array, i);
         for (int lane = 0; lane < 4; lane++) {
           Node* lane_value =
-              __ SmiFromWord32(tester.raw_assembler_for_testing()->AddNode(
+              __ SmiFromInt32(tester.raw_assembler_for_testing()->AddNode(
                   tester.raw_assembler_for_testing()
                       ->machine()
                       ->I32x4ExtractLane(lane),
@@ -959,7 +959,7 @@ class CodeGeneratorTester {
         generator_(environment->main_zone(), &frame_, &linkage_,
                    environment->code(), &info_, environment->main_isolate(),
                    base::Optional<OsrHelper>(), kNoSourcePosition, nullptr,
-                   nullptr, LoadPoisoning::kDontPoison) {
+                   nullptr, PoisoningMitigationLevel::kOff) {
     // Force a frame to be created.
     generator_.frame_access_state()->MarkHasFrame(true);
     generator_.AssembleConstructFrame();
@@ -970,10 +970,15 @@ class CodeGeneratorTester {
   Instruction* CreateTailCall(int stack_slot_delta) {
     int optional_padding_slot = stack_slot_delta;
     InstructionOperand callee[] = {
+        AllocatedOperand(LocationOperand::REGISTER,
+                         MachineRepresentation::kTagged,
+                         kReturnRegister0.code()),
+        ImmediateOperand(ImmediateOperand::INLINE, -1),  // poison index.
         ImmediateOperand(ImmediateOperand::INLINE, optional_padding_slot),
         ImmediateOperand(ImmediateOperand::INLINE, stack_slot_delta)};
-    Instruction* tail_call = Instruction::New(zone_, kArchTailCallCodeObject, 0,
-                                              nullptr, 2, callee, 0, nullptr);
+    Instruction* tail_call =
+        Instruction::New(zone_, kArchTailCallCodeObject, 0, nullptr,
+                         arraysize(callee), callee, 0, nullptr);
     return tail_call;
   }
 
@@ -1046,10 +1051,12 @@ class CodeGeneratorTester {
         AllocatedOperand(LocationOperand::REGISTER,
                          MachineRepresentation::kTagged,
                          kReturnRegister0.code()),
+        ImmediateOperand(ImmediateOperand::INLINE, -1),  // poison index.
         ImmediateOperand(ImmediateOperand::INLINE, optional_padding_slot),
         ImmediateOperand(ImmediateOperand::INLINE, first_unused_stack_slot)};
-    Instruction* tail_call = Instruction::New(zone_, kArchTailCallCodeObject, 0,
-                                              nullptr, 3, callee, 0, nullptr);
+    Instruction* tail_call =
+        Instruction::New(zone_, kArchTailCallCodeObject, 0, nullptr,
+                         arraysize(callee), callee, 0, nullptr);
     sequence->AddInstruction(tail_call);
     sequence->EndBlock(RpoNumber::FromInt(0));
 

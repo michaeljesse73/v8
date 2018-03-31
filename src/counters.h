@@ -692,6 +692,10 @@ class RuntimeCallTimer final {
   V(ArrayBuffer_New)                                       \
   V(Array_CloneElementAt)                                  \
   V(Array_New)                                             \
+  V(BigInt64Array_New)                                     \
+  V(BigUint64Array_New)                                    \
+  V(BigIntObject_New)                                      \
+  V(BigIntObject_BigIntValue)                              \
   V(BooleanObject_BooleanValue)                            \
   V(BooleanObject_New)                                     \
   V(Context_New)                                           \
@@ -765,6 +769,7 @@ class RuntimeCallTimer final {
   V(ObjectTemplate_New)                                    \
   V(ObjectTemplate_NewInstance)                            \
   V(Object_ToArrayIndex)                                   \
+  V(Object_ToBigInt)                                       \
   V(Object_ToDetailString)                                 \
   V(Object_ToInt32)                                        \
   V(Object_ToInteger)                                      \
@@ -928,6 +933,7 @@ class RuntimeCallTimer final {
   V(KeyedStoreIC_SlowStub)                        \
   V(KeyedStoreIC_StoreFastElementStub)            \
   V(KeyedStoreIC_StoreElementStub)                \
+  V(StoreInArrayLiteralIC_SlowStub)               \
   V(LoadGlobalIC_LoadScriptContextField)          \
   V(LoadGlobalIC_SlowStub)                        \
   V(LoadIC_FunctionPrototypeStub)                 \

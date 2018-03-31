@@ -83,6 +83,11 @@ struct ProtectedInstructionData;
 
 namespace compiler {
 
+// Turbofan can only handle 2^16 control inputs. Since each control flow split
+// requires at least two bytes (jump and offset), we limit the bytecode size
+// to 128K bytes.
+const int kMaxBytecodeSizeForTurbofan = 128 * 1024;
+
 class PipelineData {
  public:
   // For main entry point.
@@ -340,8 +345,8 @@ class PipelineData {
         codegen_zone(), frame(), linkage, sequence(), info(), isolate(),
         osr_helper_, start_source_position_, jump_optimization_info_,
         protected_instructions_,
-        info()->is_poison_loads() ? LoadPoisoning::kDoPoison
-                                  : LoadPoisoning::kDontPoison);
+        info()->is_poison_loads() ? PoisoningMitigationLevel::kOn
+                                  : PoisoningMitigationLevel::kOff);
   }
 
   void BeginPhaseKind(const char* phase_kind_name) {
@@ -494,11 +499,11 @@ int PrintFunctionSource(CompilationInfo* info, Isolate* isolate,
       }
       os << shared->DebugName()->ToCString().get() << ") id{";
       os << info->optimization_id() << "," << source_id << "} start{";
-      os << shared->start_position() << "} ---\n";
+      os << shared->StartPosition() << "} ---\n";
       {
         DisallowHeapAllocation no_allocation;
-        int start = shared->start_position();
-        int len = shared->end_position() - start;
+        int start = shared->StartPosition();
+        int len = shared->EndPosition() - start;
         String::SubStringRange source(String::cast(script->source()), start,
                                       len);
         for (const auto& c : source) {
@@ -580,10 +585,10 @@ void PrintCode(Handle<Code> code, CompilationInfo* info) {
         os << "--- Raw source ---\n";
         StringCharacterStream stream(
             String::cast(Script::cast(shared->script())->source()),
-            shared->start_position());
+            shared->StartPosition());
         // fun->end_position() points to the last character in the stream. We
         // need to compensate by adding one to calculate the length.
-        int source_len = shared->end_position() - shared->start_position() + 1;
+        int source_len = shared->EndPosition() - shared->StartPosition() + 1;
         for (int i = 0; i < source_len; i++) {
           if (stream.HasMore()) {
             os << AsReversiblyEscapedUC16(stream.GetNext());
@@ -600,7 +605,7 @@ void PrintCode(Handle<Code> code, CompilationInfo* info) {
     }
     if (print_source) {
       Handle<SharedFunctionInfo> shared = info->shared_info();
-      os << "source_position = " << shared->start_position() << "\n";
+      os << "source_position = " << shared->StartPosition() << "\n";
     }
     code->Disassemble(debug_name.get(), os);
     os << "--- End code ---\n";
@@ -717,13 +722,13 @@ PipelineStatistics* CreatePipelineStatistics(Handle<Script> script,
   if (FLAG_trace_turbo) {
     TurboJsonFile json_of(info, std::ios_base::trunc);
     std::unique_ptr<char[]> function_name = info->GetDebugName();
-    int pos = info->IsStub() ? 0 : info->shared_info()->start_position();
+    int pos = info->IsStub() ? 0 : info->shared_info()->StartPosition();
     json_of << "{\"function\":\"" << function_name.get()
             << "\", \"sourcePosition\":" << pos << ", \"source\":\"";
     if (!script.is_null() && !script->source()->IsUndefined(isolate)) {
       DisallowHeapAllocation no_allocation;
-      int start = info->shared_info()->start_position();
-      int len = info->shared_info()->end_position() - start;
+      int start = info->shared_info()->StartPosition();
+      int len = info->shared_info()->EndPosition() - start;
       String::SubStringRange source(String::cast(script->source()), start, len);
       for (const auto& c : source) {
         json_of << AsEscapedUC16ForJSON(c);
@@ -780,6 +785,11 @@ class PipelineCompilationJob final : public CompilationJob {
 
 PipelineCompilationJob::Status PipelineCompilationJob::PrepareJobImpl(
     Isolate* isolate) {
+  if (compilation_info()->shared_info()->bytecode_array()->length() >
+      kMaxBytecodeSizeForTurbofan) {
+    return AbortOptimization(BailoutReason::kFunctionTooBig);
+  }
+
   if (!FLAG_always_opt) {
     compilation_info()->MarkAsBailoutOnUninitialized();
   }
@@ -795,13 +805,16 @@ PipelineCompilationJob::Status PipelineCompilationJob::PrepareJobImpl(
   if (FLAG_branch_load_poisoning) {
     compilation_info()->MarkAsPoisonLoads();
   }
-  if (compilation_info()->closure()->feedback_vector_cell()->map() ==
+  if (FLAG_turbo_allocation_folding) {
+    compilation_info()->MarkAsAllocationFoldingEnabled();
+  }
+  if (compilation_info()->closure()->feedback_cell()->map() ==
       isolate->heap()->one_closure_cell_map()) {
     compilation_info()->MarkAsFunctionContextSpecializing();
   }
 
   data_.set_start_source_position(
-      compilation_info()->shared_info()->start_position());
+      compilation_info()->shared_info()->StartPosition());
 
   linkage_ = new (compilation_info()->zone()) Linkage(
       Linkage::ComputeIncoming(compilation_info()->zone(), compilation_info()));
@@ -844,29 +857,10 @@ PipelineCompilationJob::Status PipelineCompilationJob::FinalizeJobImpl(
   return SUCCEEDED;
 }
 
-namespace {
-
-void AddWeakObjectToCodeDependency(Isolate* isolate, Handle<HeapObject> object,
-                                   Handle<Code> code) {
-  Handle<WeakCell> cell = Code::WeakCellFor(code);
-  Heap* heap = isolate->heap();
-  if (heap->InNewSpace(*object)) {
-    heap->AddWeakNewSpaceObjectToCodeDependency(object, cell);
-  } else {
-    Handle<DependentCode> dep(heap->LookupWeakObjectToCodeDependency(object));
-    dep =
-        DependentCode::InsertWeakCode(dep, DependentCode::kWeakCodeGroup, cell);
-    heap->AddWeakObjectToCodeDependency(object, dep);
-  }
-}
-
-}  // namespace
-
 void PipelineCompilationJob::RegisterWeakObjectsInOptimizedCode(
     Handle<Code> code, Isolate* isolate) {
   DCHECK(code->is_optimized_code());
   std::vector<Handle<Map>> maps;
-  std::vector<Handle<HeapObject>> objects;
   {
     DisallowHeapAllocation no_gc;
     int const mode_mask = RelocInfo::ModeMask(RelocInfo::EMBEDDED_OBJECT);
@@ -878,20 +872,12 @@ void PipelineCompilationJob::RegisterWeakObjectsInOptimizedCode(
                                   isolate);
         if (object->IsMap()) {
           maps.push_back(Handle<Map>::cast(object));
-        } else {
-          objects.push_back(object);
         }
       }
     }
   }
   for (Handle<Map> map : maps) {
-    if (map->dependent_code()->IsEmpty(DependentCode::kWeakCodeGroup)) {
-      isolate->heap()->AddRetainedMap(map);
-    }
-    Map::AddDependentCode(map, DependentCode::kWeakCodeGroup, code);
-  }
-  for (Handle<HeapObject> object : objects) {
-    AddWeakObjectToCodeDependency(isolate, object, code);
+    isolate->heap()->AddRetainedMap(map);
   }
   code->set_can_have_weak_objects(true);
 }
@@ -982,22 +968,18 @@ size_t PipelineWasmCompilationJob::AllocatedMemory() const {
 
 PipelineWasmCompilationJob::Status PipelineWasmCompilationJob::FinalizeJobImpl(
     Isolate* isolate) {
-  if (!FLAG_wasm_jit_to_native) {
-    pipeline_.FinalizeCode();
-    ValidateImmovableEmbeddedObjects();
-  } else {
-    CodeGenerator* code_generator = pipeline_.data_->code_generator();
-    CompilationInfo::WasmCodeDesc* wasm_code_desc =
-        compilation_info()->wasm_code_desc();
-    code_generator->tasm()->GetCode(isolate, &wasm_code_desc->code_desc);
-    wasm_code_desc->safepoint_table_offset =
-        code_generator->GetSafepointTableOffset();
-    wasm_code_desc->frame_slot_count =
-        code_generator->frame()->GetTotalFrameSlotCount();
-    wasm_code_desc->source_positions_table =
-        code_generator->GetSourcePositionTable();
-    wasm_code_desc->handler_table = code_generator->GetHandlerTable();
-  }
+  CodeGenerator* code_generator = pipeline_.data_->code_generator();
+  CompilationInfo::WasmCodeDesc* wasm_code_desc =
+      compilation_info()->wasm_code_desc();
+  code_generator->tasm()->GetCode(isolate, &wasm_code_desc->code_desc);
+  wasm_code_desc->safepoint_table_offset =
+      code_generator->GetSafepointTableOffset();
+  wasm_code_desc->handler_table_offset =
+      code_generator->GetHandlerTableOffset();
+  wasm_code_desc->frame_slot_count =
+      code_generator->frame()->GetTotalFrameSlotCount();
+  wasm_code_desc->source_positions_table =
+      code_generator->GetSourcePositionTable();
   return SUCCEEDED;
 }
 
@@ -1080,7 +1062,8 @@ struct GraphBuilderPhase {
         handle(data->info()->closure()->feedback_vector()),
         data->info()->osr_offset(), data->jsgraph(), CallFrequency(1.0f),
         data->source_positions(), data->native_context(),
-        SourcePosition::kNotInlined, flags);
+        SourcePosition::kNotInlined, flags, true,
+        data->info()->is_analyze_environment_liveness());
     graph_builder.CreateGraph();
   }
 };
@@ -1376,15 +1359,21 @@ struct EffectControlLinearizationPhase {
       if (FLAG_turbo_verify) ScheduleVerifier::Run(schedule);
       TraceSchedule(data->info(), data->isolate(), schedule);
 
+      // We only insert the array masking code if
+      //   - untrusted code mitigations are on,
+      //   - general load poisoning is off.
+      // TODO(jarin) Remove the array index masking code entirely once we have
+      // restricted load poisoning.
+      EffectControlLinearizer::MaskArrayIndexEnable mask_array_index =
+          (data->info()->has_untrusted_code_mitigations() &&
+           !data->info()->is_poison_loads())
+              ? EffectControlLinearizer::kMaskArrayIndex
+              : EffectControlLinearizer::kDoNotMaskArrayIndex;
       // Post-pass for wiring the control/effects
       // - connect allocating representation changes into the control&effect
       //   chains and lower them,
       // - get rid of the region markers,
       // - introduce effect phis and rewire effects to get SSA again.
-      EffectControlLinearizer::MaskArrayIndexEnable mask_array_index =
-          data->info()->has_untrusted_code_mitigations()
-              ? EffectControlLinearizer::kMaskArrayIndex
-              : EffectControlLinearizer::kDoNotMaskArrayIndex;
       EffectControlLinearizer linearizer(data->jsgraph(), schedule, temp_zone,
                                          data->source_positions(),
                                          mask_array_index);
@@ -1461,7 +1450,13 @@ struct MemoryOptimizationPhase {
     trimmer.TrimGraph(roots.begin(), roots.end());
 
     // Optimize allocations and load/store operations.
-    MemoryOptimizer optimizer(data->jsgraph(), temp_zone);
+    MemoryOptimizer optimizer(
+        data->jsgraph(), temp_zone,
+        data->info()->is_poison_loads() ? PoisoningMitigationLevel::kOn
+                                        : PoisoningMitigationLevel::kOff,
+        data->info()->is_allocation_folding_enabled()
+            ? MemoryOptimizer::AllocationFolding::kDoAllocationFolding
+            : MemoryOptimizer::AllocationFolding::kDontAllocationFolding);
     optimizer.Optimize();
   }
 };
@@ -1540,9 +1535,6 @@ struct InstructionSelectionPhase {
         data->info()->switch_jump_table_enabled()
             ? InstructionSelector::kEnableSwitchJumpTable
             : InstructionSelector::kDisableSwitchJumpTable,
-        data->info()->is_speculation_poison_enabled()
-            ? InstructionSelector::kEnableSpeculationPoison
-            : InstructionSelector::kDisableSpeculationPoison,
         data->info()->is_source_positions_enabled()
             ? InstructionSelector::kAllSourcePositions
             : InstructionSelector::kCallSourcePositions,
@@ -1553,8 +1545,8 @@ struct InstructionSelectionPhase {
         data->isolate()->serializer_enabled()
             ? InstructionSelector::kEnableSerialization
             : InstructionSelector::kDisableSerialization,
-        data->info()->is_poison_loads() ? LoadPoisoning::kDoPoison
-                                        : LoadPoisoning::kDontPoison);
+        data->info()->is_poison_loads() ? PoisoningMitigationLevel::kOn
+                                        : PoisoningMitigationLevel::kOff);
     if (!selector.SelectInstructions()) {
       data->set_compilation_failed();
     }
@@ -1971,10 +1963,15 @@ bool PipelineImpl::OptimizeGraph(Linkage* linkage) {
 Handle<Code> Pipeline::GenerateCodeForCodeStub(
     Isolate* isolate, CallDescriptor* call_descriptor, Graph* graph,
     Schedule* schedule, Code::Kind kind, const char* debug_name,
-    uint32_t stub_key, int32_t builtin_index, JumpOptimizationInfo* jump_opt) {
+    uint32_t stub_key, int32_t builtin_index, JumpOptimizationInfo* jump_opt,
+    PoisoningMitigationLevel poisoning_enabled) {
   CompilationInfo info(CStrVector(debug_name), graph->zone(), kind);
   info.set_builtin_index(builtin_index);
   info.set_stub_key(stub_key);
+
+  if (poisoning_enabled == PoisoningMitigationLevel::kOn) {
+    info.MarkAsPoisonLoads();
+  }
 
   // Construct a pipeline for scheduling and code generation.
   ZoneStats zone_stats(isolate->allocator());
@@ -2200,13 +2197,12 @@ bool PipelineImpl::SelectInstructions(Linkage* linkage) {
 
   // Allocate registers.
   if (call_descriptor->HasRestrictedAllocatableRegisters()) {
-    auto registers = call_descriptor->AllocatableRegisters();
+    RegList registers = call_descriptor->AllocatableRegisters();
     DCHECK_LT(0, NumRegs(registers));
     std::unique_ptr<const RegisterConfiguration> config;
     config.reset(RegisterConfiguration::RestrictGeneralRegisters(registers));
     AllocateRegisters(config.get(), call_descriptor, run_verifier);
   } else if (data->info()->is_poison_loads()) {
-    CHECK(InstructionSelector::SupportsSpeculationPoisoning());
     AllocateRegisters(RegisterConfiguration::Poisoning(), call_descriptor,
                       run_verifier);
   } else {

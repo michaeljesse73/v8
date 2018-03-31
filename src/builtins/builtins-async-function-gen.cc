@@ -47,12 +47,7 @@ void AsyncFunctionBuiltinsAssembler::AsyncFunctionAwaitResume(
 
   // Resume the {receiver} using our trampoline.
   Callable callable = CodeFactory::ResumeGenerator(isolate());
-  CallStub(callable, context, argument, generator);
-
-  // The resulting Promise is a throwaway, so it doesn't matter what it
-  // resolves to. What is important is that we don't end up keeping the
-  // whole chain of intermediate Promises alive by returning the return value
-  // of ResumeGenerator, as that would create a memory leak.
+  TailCallStub(callable, context, argument, generator);
 }
 
 TF_BUILTIN(AsyncFunctionAwaitFulfill, AsyncFunctionBuiltinsAssembler) {
@@ -61,7 +56,6 @@ TF_BUILTIN(AsyncFunctionAwaitFulfill, AsyncFunctionBuiltinsAssembler) {
   Node* const context = Parameter(Descriptor::kContext);
   AsyncFunctionAwaitResume(context, argument, generator,
                            JSGeneratorObject::kNext);
-  Return(UndefinedConstant());
 }
 
 TF_BUILTIN(AsyncFunctionAwaitReject, AsyncFunctionBuiltinsAssembler) {
@@ -70,7 +64,6 @@ TF_BUILTIN(AsyncFunctionAwaitReject, AsyncFunctionBuiltinsAssembler) {
   Node* const context = Parameter(Descriptor::kContext);
   AsyncFunctionAwaitResume(context, argument, generator,
                            JSGeneratorObject::kThrow);
-  Return(UndefinedConstant());
 }
 
 // ES#abstract-ops-async-function-await
@@ -88,39 +81,9 @@ void AsyncFunctionBuiltinsAssembler::AsyncFunctionAwait(
   CSA_SLOW_ASSERT(this, IsJSGeneratorObject(generator));
   CSA_SLOW_ASSERT(this, IsJSPromise(outer_promise));
 
-  Node* const native_context = LoadNativeContext(context);
-  Node* const promise = AllocateAndInitJSPromise(native_context);
-
-  Node* const promise_reactions =
-      LoadObjectField(promise, JSPromise::kReactionsOrResultOffset);
-  Node* const fulfill_handler = HeapConstant(
-      Builtins::CallableFor(isolate(), Builtins::kAsyncFunctionAwaitFulfill)
-          .code());
-  Node* const reject_handler = HeapConstant(
-      Builtins::CallableFor(isolate(), Builtins::kAsyncFunctionAwaitReject)
-          .code());
-  Node* const reaction = AllocatePromiseReaction(
-      promise_reactions, generator, fulfill_handler, reject_handler);
-  StoreObjectField(promise, JSPromise::kReactionsOrResultOffset, reaction);
-  PromiseSetHasHandler(promise);
-
-  // Perform ! Call(promiseCapability.[[Resolve]], undefined, « value »).
-  CallBuiltin(Builtins::kResolvePromise, native_context, promise, awaited);
-
-  {
-    Label done(this);
-    GotoIfNot(IsDebugActive(), &done);
-    CallRuntime(Runtime::kSetProperty, native_context, generator,
-                LoadRoot(Heap::kgenerator_outer_promise_symbolRootIndex),
-                outer_promise, SmiConstant(LanguageMode::kStrict));
-    if (is_predicted_as_caught) {
-      GotoIf(TaggedIsSmi(awaited), &done);
-      GotoIfNot(IsJSPromise(awaited), &done);
-      PromiseSetHandledHint(awaited);
-    }
-    Goto(&done);
-    BIND(&done);
-  }
+  Await(context, generator, awaited, outer_promise,
+        Builtins::kAsyncFunctionAwaitFulfill,
+        Builtins::kAsyncFunctionAwaitReject, is_predicted_as_caught);
 
   // Return outer promise to avoid adding an load of the outer promise before
   // suspending in BytecodeGenerator.
@@ -130,30 +93,28 @@ void AsyncFunctionBuiltinsAssembler::AsyncFunctionAwait(
 // Called by the parser from the desugaring of 'await' when catch
 // prediction indicates that there is a locally surrounding catch block.
 TF_BUILTIN(AsyncFunctionAwaitCaught, AsyncFunctionBuiltinsAssembler) {
-  CSA_ASSERT_JS_ARGC_EQ(this, 3);
   Node* const generator = Parameter(Descriptor::kGenerator);
-  Node* const awaited = Parameter(Descriptor::kAwaited);
+  Node* const value = Parameter(Descriptor::kValue);
   Node* const outer_promise = Parameter(Descriptor::kOuterPromise);
   Node* const context = Parameter(Descriptor::kContext);
 
   static const bool kIsPredictedAsCaught = true;
 
-  AsyncFunctionAwait(context, generator, awaited, outer_promise,
+  AsyncFunctionAwait(context, generator, value, outer_promise,
                      kIsPredictedAsCaught);
 }
 
 // Called by the parser from the desugaring of 'await' when catch
 // prediction indicates no locally surrounding catch block.
 TF_BUILTIN(AsyncFunctionAwaitUncaught, AsyncFunctionBuiltinsAssembler) {
-  CSA_ASSERT_JS_ARGC_EQ(this, 3);
   Node* const generator = Parameter(Descriptor::kGenerator);
-  Node* const awaited = Parameter(Descriptor::kAwaited);
+  Node* const value = Parameter(Descriptor::kValue);
   Node* const outer_promise = Parameter(Descriptor::kOuterPromise);
   Node* const context = Parameter(Descriptor::kContext);
 
   static const bool kIsPredictedAsCaught = false;
 
-  AsyncFunctionAwait(context, generator, awaited, outer_promise,
+  AsyncFunctionAwait(context, generator, value, outer_promise,
                      kIsPredictedAsCaught);
 }
 
